@@ -266,6 +266,33 @@ Notes:
 - Uvicorn must be able to read the certificate and private key files. If you use a reverse proxy (nginx, Caddy), it's usually better to terminate TLS there and set `BASE_URL` accordingly.
 - If you use a self-signed certificate for testing, your browser will warn about the certificate unless you add it to your trust store.
 
+## Admin page access (local-only or via secret)
+
+For extra safety the `/admin` page and all admin APIs are no longer accessible from the network by IP-based checks alone.
+They are reachable only in one of two ways:
+
+- Locally on the server (loopback requests from `127.0.0.1` or `::1`). This is what the admin `.exe` will do when it runs on the server.
+- Or by providing a secret header `X-Admin-Secret` with the value of the `ADMIN_SECRET` environment variable (useful for automated tooling that you trust).
+
+Example: start the app with an ADMIN_SECRET (PowerShell session):
+
+```powershell
+$env:ADMIN_SECRET = "s3cr3t-value"
+.\start_server.ps1 -Port 8000 -BindHost 0.0.0.0
+```
+
+Then a trusted client may call an admin API like this (example using curl on the server):
+
+```powershell
+# from server (loopback) - no secret header required
+curl http://127.0.0.1:8000/admin/api/system-info
+
+# or from a trusted process with the secret header
+curl -H "X-Admin-Secret: s3cr3t-value" http://localhost:8000/admin/api/system-info
+```
+
+Note: The recommended and default approach is to run the admin UI only via the provided admin `.exe` on the server so the admin UI is never exposed to the network. If you need remote admin access, use a secure channel (SSH tunnel, VPN) and keep `ADMIN_SECRET` secret.
+
 
 #### Problem: Externe IPs werden als intern erkannt
 **Lösung:** Netzwerk-Bereiche einschränken

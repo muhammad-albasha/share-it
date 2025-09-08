@@ -274,6 +274,34 @@ def get_access_info(request: Request) -> dict:
     }
 
 
+def is_admin_allowed(request: Request) -> bool:
+    """Erlaubt Admin-Zugriff nur wenn die Anfrage lokal (localhost) kommt
+    oder wenn ein optionaler ADMIN_SECRET Header korrekt gesetzt ist.
+
+    Diese Funktion stellt sicher, dass /admin und admin-APIs nicht aus dem
+    Netz erreichbar sind, sondern nur vom Server selbst (z.B. von der
+    .exe Admin-Anwendung), oder falls ein Secret konfiguriert und verwendet wird.
+    """
+    # direkte lokale Verbindungen erlauben
+    try:
+        client_host = request.client.host if request.client else ""
+    except Exception:
+        client_host = ""
+
+    if client_host in ("127.0.0.1", "::1", "localhost"):
+        return True
+
+    # Optional: ADMIN_SECRET in Umgebungsvariablen oder config.json
+    admin_secret = os.getenv("ADMIN_SECRET", "")
+    if not admin_secret:
+        # kein Secret gesetzt -> nur lokale zugriff erlaubt
+        return False
+
+    # Header-Prüfung erlaubt Adminzugriff, z.B. von einer lokal laufenden .exe
+    header = request.headers.get("X-Admin-Secret", "")
+    return header == admin_secret
+
+
 async def delete_one_time_file(token: str, file_path: str, orig_name: str):
     """Löscht eine One-Time-Download Datei nach dem Download (Background Task)"""
     # Kurz warten, um sicherzustellen, dass der Download abgeschlossen ist
@@ -616,9 +644,9 @@ async def download(token: str, background_tasks: BackgroundTasks):
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_page(request: Request):
     """Admin-Konfigurationsseite"""
-    # Nur interne IPs haben Zugriff auf Admin-Bereich
-    if not is_internal_ip(get_client_ip(request)):
-        raise HTTPException(status_code=403, detail="Admin-Zugriff nur für interne IPs")
+    # Admin nur lokal oder via ADMIN_SECRET (X-Admin-Secret Header)
+    if not is_admin_allowed(request):
+        raise HTTPException(status_code=403, detail="Admin-Zugriff nur lokal oder mit gültigem Admin-Secret erlaubt")
     
     access_info = get_access_info(request)
     config = load_config()
@@ -634,8 +662,8 @@ async def admin_page(request: Request):
 @app.get("/admin/api/config")
 async def get_config(request: Request):
     """Aktuelle Konfiguration abrufen"""
-    if not is_internal_ip(get_client_ip(request)):
-        raise HTTPException(status_code=403, detail="Admin-Zugriff nur für interne IPs")
+    if not is_admin_allowed(request):
+        raise HTTPException(status_code=403, detail="Admin-Zugriff nur lokal oder mit gültigem Admin-Secret erlaubt")
     
     return load_config()
 
@@ -643,8 +671,8 @@ async def get_config(request: Request):
 @app.post("/admin/api/config/network")
 async def update_network_config(request: Request):
     """Netzwerk-Konfiguration aktualisieren"""
-    if not is_internal_ip(get_client_ip(request)):
-        raise HTTPException(status_code=403, detail="Admin-Zugriff nur für interne IPs")
+    if not is_admin_allowed(request):
+        raise HTTPException(status_code=403, detail="Admin-Zugriff nur lokal oder mit gültigem Admin-Secret erlaubt")
     
     try:
         config_update = await request.json()
@@ -679,8 +707,8 @@ async def update_network_config(request: Request):
 @app.post("/admin/api/config/app")
 async def update_app_config(request: Request):
     """App-Konfiguration aktualisieren"""
-    if not is_internal_ip(get_client_ip(request)):
-        raise HTTPException(status_code=403, detail="Admin-Zugriff nur für interne IPs")
+    if not is_admin_allowed(request):
+        raise HTTPException(status_code=403, detail="Admin-Zugriff nur lokal oder mit gültigem Admin-Secret erlaubt")
     
     try:
         config_update = await request.json()
@@ -727,8 +755,8 @@ async def update_app_config(request: Request):
 @app.get("/admin/api/config/export")
 async def export_config(request: Request):
     """Konfiguration exportieren"""
-    if not is_internal_ip(get_client_ip(request)):
-        raise HTTPException(status_code=403, detail="Admin-Zugriff nur für interne IPs")
+    if not is_admin_allowed(request):
+        raise HTTPException(status_code=403, detail="Admin-Zugriff nur lokal oder mit gültigem Admin-Secret erlaubt")
     
     config = load_config()
     config["exported_at"] = datetime.now(timezone.utc).isoformat()
@@ -740,8 +768,8 @@ async def export_config(request: Request):
 @app.get("/admin/api/system-info")
 async def get_system_info(request: Request):
     """System-Informationen abrufen"""
-    if not is_internal_ip(get_client_ip(request)):
-        raise HTTPException(status_code=403, detail="Admin-Zugriff nur für interne IPs")
+    if not is_admin_allowed(request):
+        raise HTTPException(status_code=403, detail="Admin-Zugriff nur lokal oder mit gültigem Admin-Secret erlaubt")
     
     # Dateistatistiken
     with get_db() as conn:
@@ -795,9 +823,8 @@ async def access_info(request: Request):
 @app.get("/admin/api/debug-files")
 async def debug_files(request: Request):
     """Debug-Endpoint um alle Dateien in der Datenbank zu sehen"""
-    access_info = get_access_info(request)
-    if not access_info["is_internal"]:
-        raise HTTPException(status_code=403, detail="Nur für interne IPs verfügbar")
+    if not is_admin_allowed(request):
+        raise HTTPException(status_code=403, detail="Nur lokal oder mit gültigem Admin-Secret verfügbar")
     
     try:
         now = datetime.now(timezone.utc)
@@ -846,9 +873,8 @@ async def debug_files(request: Request):
 @app.post("/admin/api/create-test-expired-file")
 async def create_test_expired_file(request: Request):
     """Erstellt eine Test-Datei die bereits abgelaufen ist (nur für Debugging)"""
-    access_info = get_access_info(request)
-    if not access_info["is_internal"]:
-        raise HTTPException(status_code=403, detail="Nur für interne IPs verfügbar")
+    if not is_admin_allowed(request):
+        raise HTTPException(status_code=403, detail="Nur lokal oder mit gültigem Admin-Secret verfügbar")
     
     try:
         # Erstelle eine Test-Datei
