@@ -1,0 +1,8 @@
+INFO:     Started server process [27336]
+INFO:     Waiting for application startup.
+INFO:app:Starting automatic cleanup service...
+INFO:app:Found 0 total files in database
+INFO:app:\U0001f4be Database transaction committed successfully
+INFO:app:\U0001f9f9 Cleanup completed: 0 files removed
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)

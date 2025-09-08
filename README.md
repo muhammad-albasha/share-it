@@ -3,341 +3,158 @@
 Eigenes, kleines File‑Sharing: Datei hochladen → URL bekommen → per E‑Mail teilen. Optionales Ablaufdatum mit **automatischem Cleanup**.
 
 ## Features
-
-- ✅ Datei-Upload mit Drag & Drop
-- ✅ Optionales Ablaufdatum (1-30 Tage)
-- ✅ **Automatisches Löschen abgelaufener Dateien**
-- ✅ **IP-basierte Zugriffskontrolle (VPN/LAN Support)**
-- ✅ SQLite-Datenbank für Metadaten
-- ✅ Responsive Web-Interface
-- ✅ Token-basierte sichere URLs
-- ✅ Cross-Platform (Windows/Linux/macOS)
+- API-only Backend (FastAPI) with file upload, download, and automatic cleanup
+- Desktop Frontend (Tkinter) for easy uploads and link sharing
+- Expiration: selectable 0–30 days (0 = one-time download)
+- Persistent settings (API URL, host, port)
+- Meine Uploads: local, persistent list of non-expired uploads with Copy/Open/Remove actions
+- Local history file: `frontend_history.json` (stored next to the app)
 
 ## Sicherheit & Zugriffskontrolle
 
-**Standard-Verhalten:**
-- **Interne IPs (VPN/LAN)**: Upload + Download ✅
-- **Externe IPs**: Nur Download ✅
+This project is now split into:
+- API-only backend (FastAPI) with no web UI
+- Desktop frontend (Tkinter) that talks to the API and can be packaged as an .exe
 
-**Standard interne Netzwerke:**
-- `192.168.0.0/16` (Privates LAN)
-- `10.0.0.0/8` (VPN/Private Networks)
-- `172.16.0.0/12` (Docker/Private Networks)
-- `127.0.0.1/32` (Localhost)
+## 1) Setup
 
-**Konfiguration:**
-```bash
-# Eigene interne Netzwerke definieren
-INTERNAL_NETWORKS="192.168.1.0/24,10.0.0.0/8,172.20.0.0/16"
+On Windows (PowerShell):
 
-# Upload für alle erlauben (nicht empfohlen)
-ALLOW_EXTERNAL_UPLOAD=true
 ```
-
-## Automatisches Cleanup
-
-Das System löscht abgelaufene Dateien automatisch:
-- **Standard**: Cleanup alle 1 Stunde
-- **Konfigurierbar** über Umgebungsvariable `CLEANUP_INTERVAL_HOURS`
-- Läuft im Hintergrund während die App aktiv ist
-- Löscht sowohl Datei als auch Datenbank-Eintrag
-
-## Setup
-
-```bash
 python -m venv .venv
-source .venv/bin/activate # Windows: .venv\\Scripts\\activate
+.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-uvicorn app:app --reload --host 0.0.0.0 --port 8000
 ```
 
-## Umgebungsvariablen
+## 2) Run the API backend
 
-```bash
-BASE_URL=https://files.deine-domain.tld       # Optional: Basis-URL für Links
-DEFAULT_EXPIRE_DAYS=7                         # Standard-Ablaufzeit in Tagen
-MAX_EXPIRE_DAYS=30                            # Maximum Ablaufzeit in Tagen
-CLEANUP_INTERVAL_HOURS=1                      # Cleanup-Intervall in Stunden
-
-# Sicherheit
-INTERNAL_NETWORKS="192.168.0.0/16,10.0.0.0/8,172.16.0.0/12,127.0.0.1/32"
-ALLOW_EXTERNAL_UPLOAD=false                   # Upload für externe IPs verbieten
+```
+uvicorn app:app --host 0.0.0.0 --port 8000
 ```
 
-## API Endpoints
-
-- `GET /` - Web-Interface
-- `POST /api/upload` - Datei hochladen (nur interne IPs)
-- `GET /d/{token}` - Datei herunterladen (alle IPs)
-- `GET /api/access-info` - Zugriffsinformationen der aktuellen IP
-- `DELETE /api/purge-expired` - Manuelles Cleanup
-- `GET /api/cleanup-status` - Cleanup-Status anzeigen
-
-## Monitoring
-
-Zugriffsinformationen prüfen:
-```bash
-curl http://localhost:8000/api/access-info
-```
-
-Cleanup-Status abfragen:
-```bash
-curl http://localhost:8000/api/cleanup-status
-```
-
-Manuelles Cleanup:
-```bash
-curl -X DELETE http://localhost:8000/api/purge-expired
-```
-
-## VPN/Reverse Proxy Setup
-
-### VPN-Konfiguration
-
-Wenn du einen VPN verwendest, stelle sicher, dass die echte Client-IP weitergegeben wird:
-
-#### 1. Standard VPN-Netzwerke
-Die App erkennt automatisch diese Standard-Netzwerke als "intern":
-- `192.168.0.0/16` - Private LANs (Router-Standard)
-- `10.0.0.0/8` - VPN & Private Networks (OpenVPN, WireGuard)
-- `172.16.0.0/12` - Docker & Container Networks
-- `127.0.0.1/32` - Localhost
-
-#### 2. Eigene VPN-Netzwerke konfigurieren
-
-**Für OpenVPN (10.8.0.0/24):**
-```bash
-INTERNAL_NETWORKS="10.8.0.0/24,192.168.1.0/24" python -m uvicorn app:app --host 0.0.0.0 --port 8000
-```
-
-**Für WireGuard (10.10.0.0/24):**
-```bash
-INTERNAL_NETWORKS="10.10.0.0/24" python -m uvicorn app:app --host 0.0.0.0 --port 8000
-```
-
-**Mehrere VPN-Netzwerke:**
-```bash
-export INTERNAL_NETWORKS="10.8.0.0/24,10.10.0.0/24,192.168.100.0/24"
-python -m uvicorn app:app --host 0.0.0.0 --port 8000
-```
-
-#### 3. VPN-Server Konfiguration
-
-**Deine VPN-IP herausfinden:**
-```bash
-# Über die App
-curl http://deine-domain.com:8000/api/access-info
-
-# Oder direkt
-ip addr show tun0  # OpenVPN
-ip addr show wg0   # WireGuard
-```
-
-**Beispiel-Antwort:**
-```json
-{
-  "client_ip": "10.8.0.5",
-  "is_internal": true,
-  "can_upload": true,
-  "can_download": true
-}
-```
-
-### Reverse Proxy Setup
-
-#### Nginx Konfiguration
-```nginx
-server {
-    listen 80;
-    server_name files.deine-domain.com;
-    
-    location / {
-        proxy_pass http://localhost:8000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        
-        # Für große Datei-Uploads
-        client_max_body_size 1G;
-        proxy_request_buffering off;
-    }
-}
-```
-
-#### Apache Konfiguration
-```apache
-<VirtualHost *:80>
-    ServerName files.deine-domain.com
-    
-    ProxyPreserveHost On
-    ProxyPass / http://localhost:8000/
-    ProxyPassReverse / http://localhost:8000/
-    
-    # Real IP weitergeben
-    ProxyAddHeaders On
-    
-    # Für große Uploads
-    LimitRequestBody 1073741824  # 1GB
-</VirtualHost>
-```
-
-#### Caddy Konfiguration
-```caddyfile
-files.deine-domain.com {
-    reverse_proxy localhost:8000
-    request_body {
-        max_size 1GB
-    }
-}
-```
-
-### Docker Setup
-
-#### Docker Compose
-```yaml
-version: '3.8'
-services:
-  wetransfer-light:
-    build: .
-    ports:
-      - "8000:8000"
-    environment:
-      - BASE_URL=https://files.deine-domain.com
-      - INTERNAL_NETWORKS=172.18.0.0/16,10.0.0.0/8,192.168.0.0/16
-      - CLEANUP_INTERVAL_HOURS=2
-    volumes:
-      - ./storage:/app/storage
-      - ./files.db:/app/files.db
-    networks:
-      - default
-
-networks:
-  default:
-    driver: bridge
-    ipam:
-      config:
-        - subnet: 172.18.0.0/16
-```
-
-### Troubleshooting
-
-#### Problem: "Upload nicht verfügbar" obwohl im VPN
-**Lösung:** IP-Bereich prüfen und anpassen
-```bash
-# 1. Aktuelle IP prüfen
-curl http://localhost:8000/api/access-info
-
-# 2. Netzwerk-Bereich anpassen
-INTERNAL_NETWORKS="deine-vpn-ip/24" python -m uvicorn app:app
-```
-
-## Building the admin desktop EXE (Windows)
-
-A helper script `build_admin_exe.ps1` is included to create a single-file EXE using PyInstaller.
-
-Steps (PowerShell):
-
-1. Create and activate a venv in the project root:
-  .\.venv\Scripts\activate; python -m pip install -r requirements.txt
-
-2. Run the build helper (uses the venv python):
-  .\build_admin_exe.ps1
-
-The built executable will be in `dist\admin_desktop`.
-
-Notes and troubleshooting:
-- If your app uses templates/static assets, ensure `templates/` and `static/` are present — the spec bundles them.
-- Windows Explorer caches icons. If the tray icon or exe icon doesn't update after rebuilding, try restarting Explorer or log out/in.
-
-## Running with TLS / HTTPS
-
-You can run the app with HTTPS by supplying a certificate and key to the `start_server.ps1` helper. When TLS is active, generated download links will use `https://` (unless `BASE_URL` is explicitly configured).
-
-Example (PowerShell):
-
-```powershell
-# Run with TLS
-.\start_server.ps1 -Port 8443 -BindHost 0.0.0.0 -CertFile C:\path\to\fullchain.pem -KeyFile C:\path\to\privkey.pem
-```
+Open API docs: http://127.0.0.1:8000/docs
 
 Notes:
-- `BASE_URL` (env var or configured via Admin) takes precedence for generated public links. Set `BASE_URL` to an https URL (e.g. `https://files.example.com`) if you run behind a reverse proxy or want a stable public URL.
-- Uvicorn must be able to read the certificate and private key files. If you use a reverse proxy (nginx, Caddy), it's usually better to terminate TLS there and set `BASE_URL` accordingly.
-- If you use a self-signed certificate for testing, your browser will warn about the certificate unless you add it to your trust store.
+- Backend runs API-only. HTML templates and static UI are not served anymore.
+- Storage is in the `storage/` folder (auto-created). Database is `files.db`.
+- Config is stored in `config.json`.
 
-## Admin page access (local-only or via secret)
+## 3) Run the desktop frontend
 
-For extra safety the `/admin` page and all admin APIs are no longer accessible from the network by IP-based checks alone.
-They are reachable only in one of two ways:
-
-- Locally on the server (loopback requests from `127.0.0.1` or `::1`). This is what the admin `.exe` will do when it runs on the server.
-- Or by providing a secret header `X-Admin-Secret` with the value of the `ADMIN_SECRET` environment variable (useful for automated tooling that you trust).
-
-Example: start the app with an ADMIN_SECRET (PowerShell session):
-
-```powershell
-$env:ADMIN_SECRET = "s3cr3t-value"
-.\start_server.ps1 -Port 8000 -BindHost 0.0.0.0
+```
+python frontend_desktop.py
 ```
 
-Then a trusted client may call an admin API like this (example using curl on the server):
+Use the GUI to select a file and upload to the API. You will get a copyable download link.
+The "Meine Uploads" section shows your not-yet-expired uploads; you can copy/open links anytime or remove entries from the local list.
 
-```powershell
-# from server (loopback) - no secret header required
-curl http://127.0.0.1:8000/admin/api/system-info
+## 4) Package the desktop frontend as .exe
 
-# or from a trusted process with the secret header
-curl -H "X-Admin-Secret: s3cr3t-value" http://localhost:8000/admin/api/system-info
+Install PyInstaller if needed, then build:
+
+```
+pip install pyinstaller
+pyinstaller --noconfirm --onefile --windowed --name ShareIt frontend_desktop.py
 ```
 
-Note: The recommended and default approach is to run the admin UI only via the provided admin `.exe` on the server so the admin UI is never exposed to the network. If you need remote admin access, use a secure channel (SSH tunnel, VPN) and keep `ADMIN_SECRET` secret.
+The .exe will be created under `dist/ShareIt.exe`.
 
+Tip: If your API URL is fixed, you can hard-code it in `frontend_desktop.py` default input.
 
-#### Problem: Externe IPs werden als intern erkannt
-**Lösung:** Netzwerk-Bereiche einschränken
-```bash
-# Nur spezifische VPN-Range
-INTERNAL_NETWORKS="10.8.0.0/24" python -m uvicorn app:app
+## 4a) Windows helpers: Start/Stop scripts
+
+On Windows you can use these helper scripts:
+
+- `./start-backend.ps1` to start the API (creates `uvicorn.pid` and `uvicorn.meta.json`)
+- `./stop-backend.ps1` to stop it again
+
+Examples (PowerShell):
+
+```
+./start-backend.ps1 -BindAddress 0.0.0.0 -BindPort 8000 -LogLevel info -Detach
+# ... later
+./stop-backend.ps1
 ```
 
-#### Problem: Reverse Proxy übergibt falsche IP
-**Lösung:** Proxy-Headers prüfen
-```bash
-# Headers checken
-curl -H "X-Forwarded-For: 1.2.3.4" http://localhost:8000/api/access-info
+# Share‑It (Self‑Hosted)
+
+Kleines, selbst gehostetes File‑Sharing: Datei hochladen → Download‑Link teilen. Optionales Ablaufdatum mit automatischem Cleanup.
+
+## Architektur
+- Backend: FastAPI (nur API, keine Web‑UI)
+- Desktop‑Frontend: Tkinter (als .exe buildbar), kommuniziert mit der API
+
+## Voraussetzungen
+- Windows mit PowerShell
+- Python 3.10+ (empfohlen in virtuellem Environment)
+
+## Installation (Windows PowerShell)
 ```
-
-### Sicherheits-Tipps
-
-1. **Nie ALLOW_EXTERNAL_UPLOAD=true in Produktion**
-2. **Immer spezifische VPN-Ranges verwenden**
-3. **Reverse Proxy mit HTTPS konfigurieren**
-4. **Regelmäßige Cleanup-Intervalle setzen**
-
-### Beispiel-Setups
-
-#### Home-Lab mit WireGuard
-```bash
-# WireGuard VPN: 10.10.0.0/24
-# Home LAN: 192.168.1.0/24
-INTERNAL_NETWORKS="10.10.0.0/24,192.168.1.0/24"
-BASE_URL="https://files.home.lab"
-python -m uvicorn app:app --host 0.0.0.0 --port 8000
-```
-
-#### Büro mit OpenVPN
-```bash
-# OpenVPN: 10.8.0.0/24  
-# Büro LAN: 192.168.100.0/24
-INTERNAL_NETWORKS="10.8.0.0/24,192.168.100.0/24"
-CLEANUP_INTERVAL_HOURS=1
-python -m uvicorn app:app --host 0.0.0.0 --port 8000
-```
-
-
-
-Remove-Item -Recurse -Force .venv
 python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install --upgrade pip
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+```
+
+## Backend starten
+Variante A – direkt mit Uvicorn (Konsole sichtbar):
+```
+uvicorn app:app --host 0.0.0.0 --port 8000
+```
+
+Variante B – per Script (Hintergrund, optional ohne Konsole):
+```
+./start-backend.ps1 -Detach
+```
+Optionen:
+- `-NoConsole` startet ohne sichtbares Fenster (bevorzugt pythonw.exe)
+- `-BindAddress 0.0.0.0` IP‑Bindung ändern
+- `-BindPort 8000` Port ändern
+- `-LogLevel info` Log‑Level
+- `-LogFile backend.log` Logs in Datei schreiben (stdout/err getrennt)
+
+Stoppen:
+```
+./stop-backend.ps1
+```
+Falls keine PID‑Datei vorhanden ist, kann über Port entdeckt/gestoppt werden:
+```
+./stop-backend.ps1 -Port 8000           # Ersten passenden Prozess stoppen
+./stop-backend.ps1 -Port 8000 -All      # Alle passenden Prozesse stoppen
+./stop-backend.ps1 -Port 8000 -DryRun   # Nur anzeigen, was gestoppt würde
+```
+
+Hinweise:
+- Das Start‑Script legt `uvicorn.pid` und `uvicorn.meta.json` im Projektordner an.
+- API‑Docs: http://127.0.0.1:8000/docs
+- Ablage: Dateien unter `storage/`, Datenbank `files.db`, Konfiguration `config.json`.
+
+## Desktop‑App (.exe) bauen
+Mit PyInstaller:
+```
+pip install pyinstaller
+pyinstaller --noconfirm --onefile --windowed --name ShareIt frontend_desktop.py
+```
+Die .exe liegt danach unter `dist/ShareIt.exe`.
+
+Einstellungen (API‑URL, Ports, etc.) lassen sich in der App über den Button „Einstellungen“ setzen und werden persistent gespeichert.
+
+## API Kurzreferenz
+- `POST /api/upload`  (multipart: file, expires_in_days)
+- `GET /d/{token}`    Datei herunterladen
+- `GET /api/access-info`  Basis‑Infos zum aufrufenden Client
+- `DELETE /api/purge-expired`  Abgelaufene Einträge löschen
+- `GET /api/cleanup-status`    Cleanup‑Status anzeigen
+
+## Konfiguration (Backend, Umgebungsvariablen)
+- `BASE_URL`  Öffentliche Basis‑URL für generierte Links (optional)
+- `DEFAULT_EXPIRE_DAYS`  Standard‑Ablaufzeit in Tagen (int)
+- `MAX_EXPIRE_DAYS`  Maximale Ablaufzeit in Tagen (int)
+- `CLEANUP_INTERVAL_HOURS`  Intervall für automatisches Cleanup (Stunden)
+- `INTERNAL_NETWORKS`  Kommagetrennte CIDRs, die als „intern“ gelten
+- `ALLOW_EXTERNAL_UPLOAD`  `true`, um Uploads von extern zu erlauben (nicht empfohlen)
+
+## Troubleshooting
+- Port belegt? Anderen Port nutzen: `./start-backend.ps1 -BindPort 8001`
+- Läuft der Dienst? Prüfen: `netstat -ano | findstr :8000`
+- Stop findet keine PID? Discovery nutzen: `./stop-backend.ps1 -Port 8000`
+- Keine Konsole gewünscht? `-NoConsole` verwenden; mit `-LogFile` Logs mitschreiben (stdout → .log, stderr → .log.err).

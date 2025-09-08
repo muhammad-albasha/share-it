@@ -14,9 +14,7 @@ from typing import Dict, Any
 
 
 from fastapi import FastAPI, Request, UploadFile, File, Form, HTTPException, BackgroundTasks
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
+from fastapi.responses import FileResponse, JSONResponse
 
 
 # =====================
@@ -110,9 +108,7 @@ current_config = load_config()
 update_runtime_config(current_config)
 
 
-app = FastAPI(title="Share-It")
-app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
-templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
+app = FastAPI(title="Share-It API", description="API backend for Share-It file sharing service (no UI)")
 
 # Hintergrund-Task für automatisches Cleanup
 cleanup_task = None
@@ -196,19 +192,10 @@ def compute_expiry(days: int | None) -> str | None:
 
 
 def public_download_url(token: str, request: Request) -> str:
-    # Bevorzugt BASE_URL, ansonsten Host und Scheme aus Request
+# Bevorzugt BASE_URL, ansonsten Host aus Request
     if BASE_URL:
         return f"{BASE_URL}/d/{token}"
-
-    # FastAPI's request.url.scheme reflektiert https wenn TLS aktiv ist
-    scheme = getattr(request.url, 'scheme', None) or 'http'
-    host = str(request.base_url).rstrip("/")
-    # base may already include scheme, so ensure we don't duplicate
-    if host.startswith('http://') or host.startswith('https://'):
-        base = host
-    else:
-        base = f"{scheme}://{host.lstrip('/')}"
-
+    base = str(request.base_url).rstrip("/")
     return f"{base}/d/{token}"
 
 
@@ -272,34 +259,6 @@ def get_access_info(request: Request) -> dict:
         "can_upload": is_internal or ALLOW_EXTERNAL_UPLOAD,
         "can_download": True  # Download ist immer erlaubt
     }
-
-
-def is_admin_allowed(request: Request) -> bool:
-    """Erlaubt Admin-Zugriff nur wenn die Anfrage lokal (localhost) kommt
-    oder wenn ein optionaler ADMIN_SECRET Header korrekt gesetzt ist.
-
-    Diese Funktion stellt sicher, dass /admin und admin-APIs nicht aus dem
-    Netz erreichbar sind, sondern nur vom Server selbst (z.B. von der
-    .exe Admin-Anwendung), oder falls ein Secret konfiguriert und verwendet wird.
-    """
-    # direkte lokale Verbindungen erlauben
-    try:
-        client_host = request.client.host if request.client else ""
-    except Exception:
-        client_host = ""
-
-    if client_host in ("127.0.0.1", "::1", "localhost"):
-        return True
-
-    # Optional: ADMIN_SECRET in Umgebungsvariablen oder config.json
-    admin_secret = os.getenv("ADMIN_SECRET", "")
-    if not admin_secret:
-        # kein Secret gesetzt -> nur lokale zugriff erlaubt
-        return False
-
-    # Header-Prüfung erlaubt Adminzugriff, z.B. von einer lokal laufenden .exe
-    header = request.headers.get("X-Admin-Secret", "")
-    return header == admin_secret
 
 
 async def delete_one_time_file(token: str, file_path: str, orig_name: str):
@@ -453,16 +412,17 @@ async def periodic_cleanup():
 # =====================
 
 
-@app.get("/", response_class=HTMLResponse)
-async def index(request: Request):
-    access_info = get_access_info(request)
-    context = {
-        "request": request, 
-        "max_expire": MAX_EXPIRE_DAYS, 
-        "default_expire": DEFAULT_EXPIRE_DAYS,
-        "access_info": access_info
+@app.get("/")
+async def root(request: Request):
+    """Minimal API landing endpoint (no UI)."""
+    return {
+        "name": "Share-It API",
+        "version": 1,
+        "message": "This instance runs in API-only mode (no web UI).",
+        "docs": f"{str(request.base_url).rstrip('/')}/docs",
+        "upload_endpoint": f"{str(request.base_url).rstrip('/')}/api/upload",
+        "download_example": f"{str(request.base_url).rstrip('/')}/d/{{token}}",
     }
-    return templates.TemplateResponse("index.html", context)
 
 
 @app.post("/api/upload")
@@ -641,29 +601,14 @@ async def download(token: str, background_tasks: BackgroundTasks):
         logger.error(f"❌ Error during file download: {e}")
         raise HTTPException(status_code=500, detail="Fehler beim Download")
 
-@app.get("/admin", response_class=HTMLResponse)
-async def admin_page(request: Request):
-    """Admin-Konfigurationsseite"""
-    # Admin nur lokal oder via ADMIN_SECRET (X-Admin-Secret Header)
-    if not is_admin_allowed(request):
-        raise HTTPException(status_code=403, detail="Admin-Zugriff nur lokal oder mit gültigem Admin-Secret erlaubt")
-    
-    access_info = get_access_info(request)
-    config = load_config()
-    
-    context = {
-        "request": request,
-        "access_info": access_info,
-        "config": config
-    }
-    return templates.TemplateResponse("admin.html", context)
+# Note: The HTML admin page was removed to keep backend API-only.
 
 
 @app.get("/admin/api/config")
 async def get_config(request: Request):
     """Aktuelle Konfiguration abrufen"""
-    if not is_admin_allowed(request):
-        raise HTTPException(status_code=403, detail="Admin-Zugriff nur lokal oder mit gültigem Admin-Secret erlaubt")
+    if not is_internal_ip(get_client_ip(request)):
+        raise HTTPException(status_code=403, detail="Admin-Zugriff nur für interne IPs")
     
     return load_config()
 
@@ -671,8 +616,8 @@ async def get_config(request: Request):
 @app.post("/admin/api/config/network")
 async def update_network_config(request: Request):
     """Netzwerk-Konfiguration aktualisieren"""
-    if not is_admin_allowed(request):
-        raise HTTPException(status_code=403, detail="Admin-Zugriff nur lokal oder mit gültigem Admin-Secret erlaubt")
+    if not is_internal_ip(get_client_ip(request)):
+        raise HTTPException(status_code=403, detail="Admin-Zugriff nur für interne IPs")
     
     try:
         config_update = await request.json()
@@ -707,8 +652,8 @@ async def update_network_config(request: Request):
 @app.post("/admin/api/config/app")
 async def update_app_config(request: Request):
     """App-Konfiguration aktualisieren"""
-    if not is_admin_allowed(request):
-        raise HTTPException(status_code=403, detail="Admin-Zugriff nur lokal oder mit gültigem Admin-Secret erlaubt")
+    if not is_internal_ip(get_client_ip(request)):
+        raise HTTPException(status_code=403, detail="Admin-Zugriff nur für interne IPs")
     
     try:
         config_update = await request.json()
@@ -755,8 +700,8 @@ async def update_app_config(request: Request):
 @app.get("/admin/api/config/export")
 async def export_config(request: Request):
     """Konfiguration exportieren"""
-    if not is_admin_allowed(request):
-        raise HTTPException(status_code=403, detail="Admin-Zugriff nur lokal oder mit gültigem Admin-Secret erlaubt")
+    if not is_internal_ip(get_client_ip(request)):
+        raise HTTPException(status_code=403, detail="Admin-Zugriff nur für interne IPs")
     
     config = load_config()
     config["exported_at"] = datetime.now(timezone.utc).isoformat()
@@ -768,8 +713,8 @@ async def export_config(request: Request):
 @app.get("/admin/api/system-info")
 async def get_system_info(request: Request):
     """System-Informationen abrufen"""
-    if not is_admin_allowed(request):
-        raise HTTPException(status_code=403, detail="Admin-Zugriff nur lokal oder mit gültigem Admin-Secret erlaubt")
+    if not is_internal_ip(get_client_ip(request)):
+        raise HTTPException(status_code=403, detail="Admin-Zugriff nur für interne IPs")
     
     # Dateistatistiken
     with get_db() as conn:
@@ -820,11 +765,39 @@ async def access_info(request: Request):
     """Gibt Zugriffsinformationen für die aktuelle IP zurück"""
     return get_access_info(request)
 
+
+@app.get("/api/link-status/{token}")
+async def link_status(token: str):
+    """Leichtgewichtige Prüfung, ob ein Download-Link (Token) noch existiert.
+    Keine Nebenwirkungen, kein Datei-Streaming.
+    """
+    try:
+        with get_db() as conn:
+            row = conn.execute(
+                "SELECT expires_at FROM files WHERE token = ?",
+                (token,)
+            ).fetchone()
+        if not row:
+            return {"exists": False}
+        # Prüfe Ablauf
+        exp = row["expires_at"]
+        if exp:
+            try:
+                if datetime.fromisoformat(exp) < datetime.now(timezone.utc):
+                    return {"exists": False}
+            except ValueError:
+                return {"exists": False}
+        return {"exists": True}
+    except Exception:
+        # Bei Fehler konservativ: nicht löschen im Frontend
+        return {"exists": True}
+
 @app.get("/admin/api/debug-files")
 async def debug_files(request: Request):
     """Debug-Endpoint um alle Dateien in der Datenbank zu sehen"""
-    if not is_admin_allowed(request):
-        raise HTTPException(status_code=403, detail="Nur lokal oder mit gültigem Admin-Secret verfügbar")
+    access_info = get_access_info(request)
+    if not access_info["is_internal"]:
+        raise HTTPException(status_code=403, detail="Nur für interne IPs verfügbar")
     
     try:
         now = datetime.now(timezone.utc)
@@ -873,8 +846,9 @@ async def debug_files(request: Request):
 @app.post("/admin/api/create-test-expired-file")
 async def create_test_expired_file(request: Request):
     """Erstellt eine Test-Datei die bereits abgelaufen ist (nur für Debugging)"""
-    if not is_admin_allowed(request):
-        raise HTTPException(status_code=403, detail="Nur lokal oder mit gültigem Admin-Secret verfügbar")
+    access_info = get_access_info(request)
+    if not access_info["is_internal"]:
+        raise HTTPException(status_code=403, detail="Nur für interne IPs verfügbar")
     
     try:
         # Erstelle eine Test-Datei
