@@ -272,3 +272,10 @@ INTERNAL_NETWORKS="10.8.0.0/24,192.168.100.0/24"
 CLEANUP_INTERVAL_HOURS=1
 python -m uvicorn app:app --host 0.0.0.0 --port 8000
 ```
+
+
+
+Remove-Item -Recurse -Force .venv
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --upgrade pip
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
