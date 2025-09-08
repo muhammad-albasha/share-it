@@ -10,11 +10,20 @@ import json
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, Optional
+
+# Optional S3 / MinIO Support
+try:  # pragma: no cover (optional dependency)
+    import boto3  # type: ignore
+    from botocore.exceptions import BotoCoreError, ClientError  # type: ignore
+except Exception:  # pragma: no cover
+    boto3 = None  # type: ignore
+    BotoCoreError = ClientError = Exception  # type: ignore
 
 
 from fastapi import FastAPI, Request, UploadFile, File, Form, HTTPException, BackgroundTasks
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, HTMLResponse
+from fastapi.staticfiles import StaticFiles
 
 
 # =====================
@@ -37,9 +46,111 @@ ALLOW_EXTERNAL_UPLOAD = os.getenv("ALLOW_EXTERNAL_UPLOAD", "false").lower() == "
 
 STORAGE_DIR.mkdir(exist_ok=True)
 
-# Logging konfigurieren
+# Branding / Corporate Style (konfigurierbar über ENV)
+BRAND_NAME = os.getenv("BRAND_NAME", "Hirsch + Lorenz")
+BRAND_LOGO = os.getenv("BRAND_LOGO", "/static/logo.png")  # Pfad oder absolute URL
+BRAND_COLOR = os.getenv("BRAND_COLOR", "#dce3e8")  # Primärfarbe (dunkles Blau)
+BRAND_ACCENT = os.getenv("BRAND_ACCENT", "#e87722")  # Akzent (Orange)
+BRAND_BG = os.getenv("BRAND_BG", "#ffffff")  # Hintergrund
+BRAND_TEXT = os.getenv("BRAND_TEXT", "#1a1f26")  # Textfarbe dunkel
+BRAND_SOFT = os.getenv("BRAND_SOFT", "#f5f7fa")  # Sekundärer Bereich
+
+
+# Logging konfigurieren früh initialisieren
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Upload Token (nach Logger-Setup, damit wir loggen können)
+UPLOAD_TOKEN = os.getenv("UPLOAD_TOKEN")  # Optionaler geheimer Token für Uploads von extern
+UPLOAD_TOKEN_FILE = os.getenv("UPLOAD_TOKEN_FILE", "mein_token.txt")
+if not UPLOAD_TOKEN and UPLOAD_TOKEN_FILE:
+    try:
+        p = (BASE_DIR / UPLOAD_TOKEN_FILE)
+        if p.exists():
+            content = p.read_text(encoding="utf-8").strip().splitlines()
+            if content:
+                UPLOAD_TOKEN = content[0].strip()
+                logger.info("UPLOAD_TOKEN aus Datei geladen (maskiert): %s***", UPLOAD_TOKEN[:4])
+    except Exception as e:
+        logger.warning(f"Konnte Upload Token Datei nicht lesen: {e}")
+
+
+# =====================
+# S3 / MinIO Konfiguration (per ENV)
+# =====================
+STORAGE_BACKEND = os.getenv("STORAGE_BACKEND", "local").lower()  # 'local' oder 's3'
+S3_ENDPOINT = os.getenv("S3_ENDPOINT")  # z.B. https://minio.example.local
+S3_REGION = os.getenv("S3_REGION", "us-east-1")
+S3_BUCKET = os.getenv("S3_BUCKET")
+S3_ACCESS_KEY = os.getenv("S3_ACCESS_KEY")
+S3_SECRET_KEY = os.getenv("S3_SECRET_KEY")
+S3_PRESIGN_EXPIRE_SECONDS = int(os.getenv("S3_PRESIGN_EXPIRE_SECONDS", "900"))  # 15 Min Default
+
+def is_s3_backend() -> bool:
+    return STORAGE_BACKEND == "s3"
+
+_s3_client = None
+
+def get_s3_client():  # lazy init
+    global _s3_client
+    if not is_s3_backend():
+        return None
+    if _s3_client is not None:
+        return _s3_client
+    if boto3 is None:
+        raise RuntimeError("boto3 nicht installiert – bitte 'pip install boto3' ausführen oder STORAGE_BACKEND=local setzen.")
+    session = boto3.session.Session()
+    params = {
+        "aws_access_key_id": S3_ACCESS_KEY,
+        "aws_secret_access_key": S3_SECRET_KEY,
+        "region_name": S3_REGION or "us-east-1",
+    }
+    if S3_ENDPOINT:
+        params["endpoint_url"] = S3_ENDPOINT
+    _s3_client = session.client("s3", **params)
+    return _s3_client
+
+def ensure_bucket():
+    if not is_s3_backend() or not S3_BUCKET:
+        return
+    client = get_s3_client()
+    try:
+        client.head_bucket(Bucket=S3_BUCKET)
+    except ClientError as e:  # Bucket evtl. nicht vorhanden
+        code = getattr(e, "response", {}).get("Error", {}).get("Code")
+        if code in ("404", "NoSuchBucket"):
+            logger.info(f"S3 Bucket {S3_BUCKET} nicht vorhanden – erstelle...")
+            create_args = {"Bucket": S3_BUCKET}
+            if S3_REGION and S3_REGION != "us-east-1":
+                create_args["CreateBucketConfiguration"] = {"LocationConstraint": S3_REGION}
+            client.create_bucket(**create_args)
+        else:
+            logger.warning(f"S3 head_bucket Fehler: {e}")
+
+def s3_object_key(file_id: str, suffix: str) -> str:
+    return f"shareit/{file_id}{suffix}"  # Namespace
+
+def upload_stream_to_s3(file_like, key: str, content_type: str):
+    client = get_s3_client()
+    client.upload_fileobj(file_like, S3_BUCKET, key, ExtraArgs={"ContentType": content_type})
+
+def generate_presigned_download(key: str, filename: str, expires_seconds: Optional[int] = None) -> str:
+    client = get_s3_client()
+    params = {
+        "Bucket": S3_BUCKET,
+        "Key": key,
+        "ResponseContentDisposition": f"attachment; filename=\"{filename}\""
+    }
+    return client.generate_presigned_url(
+        "get_object", Params=params, ExpiresIn=expires_seconds or S3_PRESIGN_EXPIRE_SECONDS
+    )
+
+def delete_s3_object(key: str):
+    try:
+        client = get_s3_client()
+        client.delete_object(Bucket=S3_BUCKET, Key=key)
+    except Exception as e:
+        logger.warning(f"S3 Objekt {key} konnte nicht gelöscht werden: {e}")
 
 
 # =====================
@@ -110,6 +221,15 @@ update_runtime_config(current_config)
 
 app = FastAPI(title="Share-It API", description="API backend for Share-It file sharing service (no UI)")
 
+# Static files (logo etc.) if present
+static_dir = BASE_DIR / "static"
+if static_dir.exists():
+    try:
+        app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+        logger.info("Static directory mounted at /static")
+    except Exception as _e:
+        logger.warning(f"Konnte static Verzeichnis nicht mounten: {_e}")
+
 # Hintergrund-Task für automatisches Cleanup
 cleanup_task = None
 
@@ -118,6 +238,20 @@ async def startup_event():
     """Startet das automatische Cleanup beim App-Start"""
     global cleanup_task
     logger.info("Starting automatic cleanup service...")
+    if is_s3_backend():
+        missing = [name for name, val in [
+            ("S3_BUCKET", S3_BUCKET),
+            ("S3_ACCESS_KEY", S3_ACCESS_KEY),
+            ("S3_SECRET_KEY", S3_SECRET_KEY)
+        ] if not val]
+        if missing:
+            logger.error(f"S3 Backend aktiv aber Variablen fehlen: {', '.join(missing)}")
+        else:
+            try:
+                ensure_bucket()
+                logger.info(f"S3 Backend aktiv – Bucket '{S3_BUCKET}' einsatzbereit")
+            except Exception as e:
+                logger.error(f"Fehler beim Initialisieren des S3 Buckets: {e}")
     # Erstes Cleanup direkt beim Start
     cleanup_expired_files()
     # Dann periodisches Cleanup starten
@@ -171,6 +305,12 @@ with get_db() as conn:
         conn.commit()
     except sqlite3.OperationalError:
         # Spalte existiert bereits
+        pass
+    # Migration: storage backend Spalte
+    try:
+        conn.execute("ALTER TABLE files ADD COLUMN storage TEXT DEFAULT 'local'")
+        conn.commit()
+    except sqlite3.OperationalError:
         pass
     conn.commit()
 
@@ -237,8 +377,21 @@ def is_internal_ip(ip_str: str) -> bool:
 
 def check_upload_permission(request: Request) -> bool:
     """Prüft ob Upload für diese IP erlaubt ist"""
+    # 1) Explizit alles erlauben
     if ALLOW_EXTERNAL_UPLOAD:
-        return True  # Upload für alle erlaubt
+        return True
+
+    # 2) Token-Bypass (Header oder Query) – ermöglicht sicheren externen Upload ohne ganze Welt freizugeben
+    if UPLOAD_TOKEN:
+        token_header = request.headers.get("X-ShareIt-Token") or request.headers.get("X-Shareit-Token")
+        if not token_header:
+            token_header = request.query_params.get("token")  # Fallback Query Param
+        if token_header:
+            if secrets.compare_digest(token_header.strip(), UPLOAD_TOKEN):
+                logger.debug("Externer Upload mittels gültigem Token erlaubt")
+                return True
+            else:
+                logger.warning("Externer Upload: ungültiger Token erhalten")
     
     client_ip = get_client_ip(request)
     is_internal = is_internal_ip(client_ip)
@@ -305,7 +458,7 @@ def cleanup_expired_files():
         with get_db() as conn:
             # Alle Dateien finden (mit und ohne Ablaufzeit)
             rows = conn.execute(
-                "SELECT token, path, expires_at, orig_name FROM files"
+                "SELECT token, path, expires_at, orig_name, storage FROM files"
             ).fetchall()
             
             logger.info(f"Found {len(rows)} total files in database")
@@ -349,22 +502,37 @@ def cleanup_expired_files():
                         logger.info(f"🗑️ Deleting file {row['orig_name']}: {reason}")
                         
                         # Datei vom Dateisystem löschen
-                        file_path = Path(row["path"])
-                        logger.info(f"📁 File path to delete: {file_path}")
-                        logger.info(f"📂 File exists check: {file_path.exists()}")
-                        
-                        if file_path.exists():
+                        # row is sqlite3.Row; it doesn't implement dict.get. Use safe access.
+                        storage_mode = None
+                        try:
+                            storage_mode = row["storage"]  # new column in schema
+                        except Exception:
+                            storage_mode = "local"
+                        if (storage_mode or "local") == "s3":
                             try:
-                                file_path.unlink()
-                                logger.info(f"✅ Successfully deleted file from storage: {row['orig_name']}")
-                            except PermissionError as pe:
-                                logger.error(f"❌ Permission denied deleting file {file_path}: {pe}")
-                                raise  # Re-raise to skip DB deletion if file deletion fails
-                            except Exception as fe:
-                                logger.error(f"❌ Error deleting file {file_path}: {fe}")
-                                raise  # Re-raise to skip DB deletion if file deletion fails
+                                p = row["path"]
+                                key = p[len("s3://") :].split("/", 1)[1] if p.startswith("s3://") else p
+                                delete_s3_object(key)
+                                logger.info(f"✅ S3 Objekt gelöscht: {key}")
+                            except Exception as s3e:
+                                logger.error(f"❌ S3 Delete Fehler: {s3e}")
+                                raise
                         else:
-                            logger.warning(f"⚠️ File not found on disk (already deleted?): {file_path}")
+                            file_path = Path(row["path"])
+                            logger.info(f"📁 File path to delete: {file_path}")
+                            logger.info(f"📂 File exists check: {file_path.exists()}")
+                            if file_path.exists():
+                                try:
+                                    file_path.unlink()
+                                    logger.info(f"✅ Successfully deleted file from storage: {row['orig_name']}")
+                                except PermissionError as pe:
+                                    logger.error(f"❌ Permission denied deleting file {file_path}: {pe}")
+                                    raise
+                                except Exception as fe:
+                                    logger.error(f"❌ Error deleting file {file_path}: {fe}")
+                                    raise
+                            else:
+                                logger.warning(f"⚠️ File not found on disk (already deleted?): {file_path}")
                         
                         # Eintrag aus Datenbank löschen (nur wenn Datei erfolgreich gelöscht wurde)
                         logger.info(f"🗄️ Deleting database entry for token: {row['token']}")
@@ -451,29 +619,43 @@ async def upload(request: Request, file: UploadFile = File(...), expires_in_days
     if expires_in_days > MAX_EXPIRE_DAYS:
         expires_in_days = MAX_EXPIRE_DAYS
 
-    # Generiere IDs & Pfade
+    # Generiere IDs
     file_id = secrets.token_hex(16)
     token = secrets.token_urlsafe(32)
 
- # Bestimme sichere Endung per mimetype – optional
+    # Dateinamen / Mime Type
     orig_name = file.filename or "upload.bin"
     mime = file.content_type or mimetypes.guess_type(orig_name)[0] or "application/octet-stream"
+    safe_suffix = Path(orig_name).suffix  # kann leer sein
 
-
-# Wir speichern unter der internen ID, nicht unter dem Originalnamen
-    safe_suffix = Path(orig_name).suffix # kann leer sein
-    disk_path = STORAGE_DIR / f"{file_id}{safe_suffix}"
-
-
-# Stream auf Platte schreiben
     size = 0
-    with disk_path.open("wb") as f:
-        while True:
-            chunk = await file.read(1024 * 1024)
-            if not chunk:
-                break
-            size += len(chunk)
-            f.write(chunk)
+    storage_mode = "local"
+    stored_path = None
+
+    if is_s3_backend():
+        storage_mode = "s3"
+        if not (S3_BUCKET and S3_ACCESS_KEY and S3_SECRET_KEY):
+            raise HTTPException(status_code=500, detail="S3 Backend unvollständig konfiguriert.")
+        # Größe bestimmen
+        file.file.seek(0, os.SEEK_END)
+        size = file.file.tell()
+        file.file.seek(0)
+        key = s3_object_key(file_id, safe_suffix)
+        try:
+            upload_stream_to_s3(file.file, key, mime)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Fehler beim Upload: {e}")
+        stored_path = f"s3://{S3_BUCKET}/{key}"
+    else:
+        disk_path = STORAGE_DIR / f"{file_id}{safe_suffix}"
+        with disk_path.open("wb") as f_out:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                size += len(chunk)
+                f_out.write(chunk)
+        stored_path = str(disk_path)
 
     created = utcnow_iso()
     expires_at = compute_expiry(expires_in_days)
@@ -482,14 +664,30 @@ async def upload(request: Request, file: UploadFile = File(...), expires_in_days
     one_time_download = 1 if expires_in_days == 0 else 0
     
     with get_db() as conn:
-        conn.execute(
-            """
-            INSERT INTO files(id, token, orig_name, mime, size, path, created_at, expires_at, one_time_download)
-            VALUES(?,?,?,?,?,?,?,?,?)
-            """,
-            (file_id, token, orig_name, mime, size, str(disk_path), created, expires_at, one_time_download),
+        try:
+            conn.execute(
+                """
+                INSERT INTO files(id, token, orig_name, mime, size, path, created_at, expires_at, one_time_download, storage)
+                VALUES(?,?,?,?,?,?,?,?,?,?)
+                """,
+                (file_id, token, orig_name, mime, size, stored_path, created, expires_at, one_time_download, storage_mode),
             )
-    conn.commit()
+            conn.commit()
+        except sqlite3.OperationalError:
+            # Migration: storage Spalte hinzufügen
+            try:
+                conn.execute("ALTER TABLE files ADD COLUMN storage TEXT DEFAULT 'local'")
+                conn.execute(
+                    """
+                    INSERT INTO files(id, token, orig_name, mime, size, path, created_at, expires_at, one_time_download, storage)
+                    VALUES(?,?,?,?,?,?,?,?,?,?)
+                    """,
+                    (file_id, token, orig_name, mime, size, stored_path, created, expires_at, one_time_download, storage_mode),
+                )
+                conn.commit()
+            except Exception as e:
+                logger.error(f"DB Fehler (Migration/Insert): {e}")
+                raise HTTPException(status_code=500, detail="Datenbankfehler beim Speichern")
 
 
     return JSONResponse(
@@ -504,7 +702,7 @@ async def upload(request: Request, file: UploadFile = File(...), expires_in_days
     )
 
 @app.get("/d/{token}")
-async def download(token: str, background_tasks: BackgroundTasks):
+async def download(token: str, background_tasks: BackgroundTasks, request: Request, raw: bool = False):
     with get_db() as conn:
         row = conn.execute("SELECT * FROM files WHERE token = ?", (token,)).fetchone()
     if not row:
@@ -528,9 +726,22 @@ async def download(token: str, background_tasks: BackgroundTasks):
                 raise HTTPException(status_code=410, detail="Link abgelaufen.")
         except ValueError:
             pass
-    path = Path(row["path"])
-    if not os.path.exists(path):
-        raise HTTPException(status_code=404, detail="Datei nicht mehr vorhanden.")
+    # sqlite3.Row does not support .get; use key access with fallback
+    if isinstance(row, sqlite3.Row):
+        try:
+            storage_mode = row["storage"] if row["storage"] else "local"
+        except Exception:
+            storage_mode = "local"
+    else:
+        storage_mode = row.get("storage", "local") if isinstance(row, dict) else "local"
+    path_value = row["path"]
+    if storage_mode == "local":
+        path = Path(path_value)
+        if not os.path.exists(path):
+            raise HTTPException(status_code=404, detail="Datei nicht mehr vorhanden.")
+    else:
+        # Für S3 prüfen wir nicht zwingend Existenz (presign erzeugt sonst Fehler)
+        path = None
     
     # Prüfe, ob es sich um eine One-Time-Download Datei handelt
     try:
@@ -542,27 +753,114 @@ async def download(token: str, background_tasks: BackgroundTasks):
     if should_delete_after_download:
         logger.info(f"🔥 One-time download detected for {row['orig_name']} (one_time_download flag set)")
     
-    # Datei streamen – als Attachment mit Originalnamen
+    # Optional Landing-Page anzeigen (sofern nicht raw erzwungen)
+    accept_header = request.headers.get("accept", "") if request else ""
+    wants_html = (not raw) and ("text/html" in accept_header or "*/*" in accept_header)
+    if wants_html:
+        size_bytes = int(row["size"]) if row["size"] is not None else 0
+        def human_size(n: int) -> str:
+            for unit in ["B","KB","MB","GB","TB"]:
+                if n < 1024.0:
+                    return f"{n:3.1f} {unit}"
+                n /= 1024.0
+            return f"{n:.1f} PB"
+        if expires_at:
+            try:
+                exp_dt = datetime.fromisoformat(expires_at).astimezone(timezone.utc)
+                expires_info = exp_dt.strftime('%Y-%m-%d %H:%M UTC')
+            except Exception:
+                expires_info = expires_at
+        else:
+            expires_info = "Kein Ablauf"
+        raw_url = f"/d/{token}?raw=1"
+        html_parts = [
+            "<!DOCTYPE html><html lang='de'><head><meta charset='utf-8'/><title>",
+            BRAND_NAME + " – Download: " + row['orig_name'],
+            "</title><meta name='viewport' content='width=device-width,initial-scale=1'/>",
+            "<style>",
+            f"body{{font-family:system-ui,-apple-system,Segoe UI,Arial,sans-serif;background:{BRAND_BG};color:{BRAND_TEXT};margin:0;padding:0;}}",
+            f"header{{background:{BRAND_COLOR};padding:16px 40px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;box-shadow:0 2px 4px rgba(0,0,0,.12);}}",
+            "header img{height:60px;object-fit:contain;filter:drop-shadow(0 2px 4px rgba(0,0,0,.25))}",
+            "header .title{font-size:0.95rem;font-weight:600;letter-spacing:.5px;color:#fff;opacity:.9;text-transform:uppercase}",
+            "main{padding:3.2rem 2rem 4rem;display:flex;justify-content:center}",
+            f".card{{width:100%;max-width:880px;background:linear-gradient(145deg,{BRAND_SOFT} 0%,#fff 60%);border:1px solid #d8dee6;border-radius:26px;padding:3rem 3.4rem 3.2rem;box-shadow:0 10px 38px -12px rgba(0,0,0,.18),0 4px 18px -6px rgba(0,0,0,.08);}}",
+            ".headline{margin:0 0 1.4rem;font-size:1.85rem;line-height:1.18;font-weight:650;letter-spacing:.3px}",
+            ".meta{margin:1.2rem 0 2rem;line-height:1.65;font-size:1.02rem}",
+            f".btn{{display:inline-flex;align-items:center;gap:.65rem;background:{BRAND_ACCENT};color:#fff;text-decoration:none;padding:1.05rem 2.2rem;border-radius:18px;font-weight:600;font-size:1.12rem;box-shadow:0 6px 18px -6px rgba(0,0,0,.25);transition:background .18s,transform .18s;letter-spacing:.2px}}",
+            f".btn:hover{{background:#ff8d33;transform:translateY(-3px)}}",
+            f".btn:active{{transform:translateY(-1px)}}",
+            ".note{margin-top:2.1rem;font-size:.75rem;opacity:.58;line-height:1.55;letter-spacing:.3px}",
+            f".one-time{{color:{BRAND_ACCENT};font-weight:600;margin-top:.6rem;font-size:.95rem}}",
+            "@media (max-width:860px){.card{padding:2.4rem 2rem 2.6rem;border-radius:20px}.headline{font-size:1.6rem}.meta{font-size:.97rem;margin:1rem 0 1.6rem}.btn{width:100%;justify-content:center;padding:1rem 1.4rem;font-size:1.05rem;border-radius:16px}.note{margin-top:1.6rem}}@media (max-width:520px){header{padding:8px 18px}header img{height:46px}.card{padding:2.1rem 1.4rem 2.3rem;border-radius:0;box-shadow:none}.headline{font-size:1.45rem}.meta{font-size:.95rem}.btn{padding:.95rem 1.2rem;font-size:1rem}}",
+            "</style>",
+            "<script>window.addEventListener('DOMContentLoaded',function(){var a=document.getElementById('dl'); if(a){ setTimeout(function(){ a.click(); },750); }});</script>",
+            "</head><body><header>" ,
+            f"<img src='{BRAND_LOGO}' alt='Logo' onerror=\"this.style.display='none'\"/>",
+            f"<div class='title'>{BRAND_NAME}</div>",
+            "</header><main><div class='card'><h1 class='headline'>Download bereit",
+            "</h1><div class='meta'>",
+            f"<div><strong>Dateiname:</strong> {row['orig_name']}</div>",
+            f"<div><strong>Größe:</strong> {human_size(size_bytes)}</div>",
+            f"<div><strong>Speicher:</strong> {('S3/MinIO' if storage_mode=='s3' else 'Lokal')}</div>",
+            f"<div><strong>Ablauf:</strong> {expires_info}</div>",
+        ]
+        if should_delete_after_download:
+            html_parts.append("<div class='one-time'>Einmaliger Download – Datei wird nach dem Herunterladen gelöscht.</div>")
+        html_parts.extend([
+            "</div>",
+            f"<a id='dl' class='btn' href='{raw_url}' rel='noopener'>Jetzt herunterladen</a>",
+            "<div class='note'>Automatischer Start in Kürze – falls nicht, bitte Button klicken. Vertraulich behandeln.</div>",
+            "</div></main></body></html>",
+        ])
+        return HTMLResponse("".join(html_parts))
+
+    # Datei streamen – als Attachment mit Originalnamen (lokal) oder Redirect (S3)
     headers = {"Content-Disposition": f"attachment; filename*=UTF-8''{row['orig_name']}"}
     
     try:
-        # Bei One-Time-Downloads: Background Task für verzögerte Löschung planen
-        if should_delete_after_download:
-            logger.info(f"🗑️ One-time download: Will delete {row['orig_name']} after download completes")
-            background_tasks.add_task(
-                delete_one_time_file, 
-                token, 
-                row["path"], 
-                row["orig_name"]
+        if storage_mode == "s3":
+            # Presigned URL erzeugen (One-Time => kürzere Gültigkeit)
+            expires_seconds = 60 if should_delete_after_download else S3_PRESIGN_EXPIRE_SECONDS
+            try:
+                # Pfadformat s3://bucket/key
+                if path_value.startswith("s3://"):
+                    key = path_value[len("s3://") :].split("/", 1)[1]
+                else:
+                    # Fallback: kompletter Wert ist Key
+                    key = path_value
+            except Exception:
+                key = path_value
+            try:
+                presigned = generate_presigned_download(key, row['orig_name'], expires_seconds)
+            except Exception as e:
+                logger.error(f"Fehler beim Generieren der Presigned URL: {e}")
+                raise HTTPException(status_code=500, detail="Fehler beim Erzeugen der Download-URL")
+
+            if should_delete_after_download:
+                async def delayed_delete_s3():
+                    await asyncio.sleep(5)
+                    delete_s3_object(key)
+                    with get_db() as conn_del:
+                        conn_del.execute("DELETE FROM files WHERE token = ?", (token,))
+                        conn_del.commit()
+                background_tasks.add_task(delayed_delete_s3)
+            from fastapi.responses import RedirectResponse
+            return RedirectResponse(url=presigned, status_code=307)
+        else:
+            if should_delete_after_download:
+                logger.info(f"🗑️ One-time download: Will delete {row['orig_name']} after download completes")
+                background_tasks.add_task(
+                    delete_one_time_file, 
+                    token, 
+                    row["path"], 
+                    row["orig_name"]
+                )
+            return FileResponse(
+                path,
+                media_type=row["mime"] or "application/octet-stream",
+                filename=row["orig_name"],
+                headers=headers,
             )
-        
-        # FileResponse zurückgeben - die Löschung passiert im Hintergrund nach dem Download
-        return FileResponse(
-            path,
-            media_type=row["mime"] or "application/octet-stream",
-            filename=row["orig_name"],
-            headers=headers,
-        )
         
         # SOFORTIGE LÖSCHUNG bei One-Time-Downloads (nach Response)
         if should_delete_after_download:
@@ -599,6 +897,11 @@ async def download(token: str, background_tasks: BackgroundTasks):
         
     except Exception as e:
         logger.error(f"❌ Error during file download: {e}")
+        if "text/html" in accept_header:
+            return HTMLResponse(
+                f"""<!DOCTYPE html><html lang='de'><head><meta charset='utf-8'/><title>Fehler</title><style>body{{font-family:system-ui,Arial,sans-serif;background:#111;color:#eee;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0}}.box{{max-width:520px;background:#1e242b;padding:2rem 2.2rem;border:1px solid #2b323b;border-radius:14px;box-shadow:0 8px 28px -6px rgba(0,0,0,.6)}}h1{{margin-top:0;font-size:1.35rem}}code{{background:#000;padding:.25rem .45rem;border-radius:6px;font-size:.75rem}}</style></head><body><div class='box'><h1>Fehler beim Download</h1><p>Die Datei konnte nicht bereitgestellt werden.</p><p><code>{str(e)}</code></p><p>Bitte versuche es erneut oder fordere einen neuen Link an.</p></div></body></html>""",
+                status_code=500,
+            )
         raise HTTPException(status_code=500, detail="Fehler beim Download")
 
 # Note: The HTML admin page was removed to keep backend API-only.
@@ -938,7 +1241,7 @@ async def purge_all():
         
         with get_db() as conn:
             rows = conn.execute(
-                "SELECT token, path, orig_name FROM files"
+                "SELECT token, path, orig_name, storage FROM files"
             ).fetchall()
             
             logger.info(f"🗑️ PURGE ALL: Found {len(rows)} files to delete")
@@ -947,15 +1250,27 @@ async def purge_all():
                 try:
                     logger.info(f"🗑️ Deleting file {row['orig_name']}")
                     
-                    # Datei vom Dateisystem löschen
-                    file_path = Path(row["path"])
-                    logger.info(f"📁 File path to delete: {file_path}")
-                    
-                    if file_path.exists():
-                        file_path.unlink()
-                        logger.info(f"✅ Successfully deleted file from storage: {row['orig_name']}")
+                    # sqlite3.Row has no .get; safe subscripting
+                    try:
+                        storage_mode = row["storage"]
+                    except Exception:
+                        storage_mode = "local"
+                    if storage_mode == "s3":
+                        try:
+                            p = row["path"]
+                            key = p[len("s3://") :].split("/", 1)[1] if p.startswith("s3://") else p
+                            delete_s3_object(key)
+                            logger.info(f"✅ S3 Objekt gelöscht: {key}")
+                        except Exception as s3e:
+                            logger.error(f"❌ S3 Delete Fehler: {s3e}")
                     else:
-                        logger.warning(f"⚠️ File not found on disk: {file_path}")
+                        file_path = Path(row["path"])
+                        logger.info(f"📁 File path to delete: {file_path}")
+                        if file_path.exists():
+                            file_path.unlink()
+                            logger.info(f"✅ Successfully deleted file from storage: {row['orig_name']}")
+                        else:
+                            logger.warning(f"⚠️ File not found on disk: {file_path}")
                     
                     # Eintrag aus Datenbank löschen
                     conn.execute("DELETE FROM files WHERE token = ?", (row["token"],))

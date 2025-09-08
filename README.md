@@ -152,6 +152,38 @@ Einstellungen (API‑URL, Ports, etc.) lassen sich in der App über den Button �
 - `CLEANUP_INTERVAL_HOURS`  Intervall für automatisches Cleanup (Stunden)
 - `INTERNAL_NETWORKS`  Kommagetrennte CIDRs, die als „intern“ gelten
 - `ALLOW_EXTERNAL_UPLOAD`  `true`, um Uploads von extern zu erlauben (nicht empfohlen)
+- `UPLOAD_TOKEN` Geheimer Token; wenn gesetzt können externe Clients mit Header `X-ShareIt-Token: <TOKEN>` (oder Query `?token=`) hochladen obwohl IP extern ist
+- `STORAGE_BACKEND` `local` (Standard) oder `s3`
+- `S3_ENDPOINT`  (für MinIO, optional; Beispiel: `https://minio.example.local`)
+- `S3_REGION`  (Standard `us-east-1`)
+- `S3_BUCKET`  Bucket-Name (muss existieren oder wird versucht zu erzeugen)
+- `S3_ACCESS_KEY`  Access Key
+- `S3_SECRET_KEY`  Secret Key
+- `S3_PRESIGN_EXPIRE_SECONDS` Gültigkeit einer generierten Presigned URL (Default 900)
+
+### S3/MinIO Nutzung
+Beispiel (PowerShell):
+```
+$env:STORAGE_BACKEND = "s3"
+$env:S3_ENDPOINT = "https://minio.local"       # optional bei AWS S3 leer lassen
+$env:S3_REGION = "eu-central-1"
+$env:S3_BUCKET = "shareit-files"
+$env:S3_ACCESS_KEY = "minioadmin"
+$env:S3_SECRET_KEY = "minioadmin"
+uvicorn app:app --host 0.0.0.0 --port 8000
+```
+Uploads werden dann im Bucket unter `shareit/<file_id>.<ext>` gespeichert. Downloads leiten per `307 Redirect` auf eine Presigned URL, externe Nutzer benötigen keinen direkten Zugriff auf dein internes Netzwerk.
+
+### Externer Upload mit Token (empfohlen statt ALLOW_EXTERNAL_UPLOAD=true)
+PowerShell Beispiel:
+```
+$env:UPLOAD_TOKEN = "SuperGeheimerToken123"  # Backend
+uvicorn app:app --host 0.0.0.0 --port 8000
+```
+Client (curl):
+```
+curl -H "X-ShareIt-Token: SuperGeheimerToken123" -F "file=@test.txt" -F "expires_in_days=3" https://deine-url/api/upload
+```
 
 ## Troubleshooting
 - Port belegt? Anderen Port nutzen: `./start-backend.ps1 -BindPort 8001`

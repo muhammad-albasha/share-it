@@ -19,7 +19,15 @@ param(
     [ValidateSet('Normal','Minimized','Hidden')]
     [string]$WindowStyle = 'Minimized',
     # Optional log file path to capture stdout/stderr when Detach-ing
-    [string]$LogFile
+    [string]$LogFile,
+    # Provide a token explicitly (overrides env & file)
+    [string]$UploadToken,
+    # Auto-generate a token if none exists (default behavior)
+    [switch]$AutoUploadToken = $true,
+    # Path to persist/read token (first line). Relative -> repo root.
+    [string]$UploadTokenFile = "mein_token.txt",
+    # Show (echo) full token to console (otherwise only masked)
+    [switch]$ShowToken
 )
 
 $ErrorActionPreference = "Stop"
@@ -61,6 +69,62 @@ if ($needInstall) {
 # Ensure storage dir exists
 $storage = Join-Path $root "storage"
 if (-not (Test-Path $storage)) { New-Item -ItemType Directory -Path $storage | Out-Null }
+
+# ------------------------------------------------------------
+# Upload Token Handling (for external authenticated uploads)
+# Logic order:
+#   1) If -UploadToken set -> use & persist (unless empty)
+#   2) Else if $env:UPLOAD_TOKEN already set -> use as-is
+#   3) Else if token file exists -> read and export
+#   4) Else if -AutoUploadToken -> generate, save, export
+# ------------------------------------------------------------
+function New-ShareItToken {
+    # 32 random bytes -> base64 (URL-safe replacement of '+' '/')
+    $bytes = New-Object byte[] 32
+    [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+    $b64 = [Convert]::ToBase64String($bytes)
+    # make it header safe (remove '=')
+    return ($b64 -replace '=' -replace '\\+' , '-' -replace '/' , '_')
+}
+
+$tokenPath = if ([System.IO.Path]::IsPathRooted($UploadTokenFile)) { $UploadTokenFile } else { Join-Path $root $UploadTokenFile }
+$effectiveToken = $null
+
+if ($UploadToken) {
+    $effectiveToken = $UploadToken.Trim()
+    try { $effectiveToken | Out-File -FilePath $tokenPath -Encoding ascii -Force } catch {}
+} elseif ($env:UPLOAD_TOKEN) {
+    $effectiveToken = $env:UPLOAD_TOKEN.Trim()
+} elseif (Test-Path $tokenPath) {
+    try {
+        $first = Get-Content $tokenPath -TotalCount 1 | Select-Object -First 1
+        if ($first) { $effectiveToken = $first.Trim() }
+    } catch {}
+} elseif ($AutoUploadToken) {
+    $effectiveToken = New-ShareItToken
+    try {
+        $effectiveToken | Out-File -FilePath $tokenPath -Encoding ascii -Force
+        # Tighten ACL (best-effort, ignore errors on non-NTFS)
+        try {
+            $acl = Get-Acl $tokenPath
+            $inherit = [System.Security.AccessControl.InheritanceFlags]::None
+            $prop = [System.Security.AccessControl.PropagationFlags]::None
+            $rule = New-Object System.Security.AccessControl.FileSystemAccessRule($env:USERNAME,'Read','Allow')
+            $acl.SetAccessRuleProtection($true,$false)
+            $acl.ResetAccessRule($rule)
+            Set-Acl -Path $tokenPath -AclObject $acl -ErrorAction SilentlyContinue
+        } catch {}
+    } catch {}
+}
+
+if ($effectiveToken) {
+    $env:UPLOAD_TOKEN = $effectiveToken
+    $masked = $effectiveToken.Substring(0,[Math]::Min(4,$effectiveToken.Length)) + '***'
+    Write-Host ("UPLOAD_TOKEN aktiv: {0} (Datei: {1})" -f $masked, (Resolve-Path $tokenPath -ErrorAction SilentlyContinue)) -ForegroundColor Cyan
+    if ($ShowToken) { Write-Host ("Voller Token: {0}" -f $effectiveToken) -ForegroundColor Yellow }
+} else {
+    Write-Host "Kein UPLOAD_TOKEN gesetzt (nur interne Uploads erlaubt)." -ForegroundColor Yellow
+}
 
 $argsList = @("-m","uvicorn","app:app","--host",$BindAddress,"--port",$BindPort.ToString(),"--log-level",$LogLevel)
 

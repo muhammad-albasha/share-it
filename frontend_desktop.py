@@ -19,12 +19,18 @@ def human_bytes(num: int) -> str:
     return f"{num:.1f} PB"
 
 
-def upload_file(api_base: str, file_path: Path, expires: int) -> dict:
+def upload_file(api_base: str, file_path: Path, expires: int, token: str | None = None) -> dict:
+    """Upload Datei zum Backend.
+    Wenn token gesetzt -> Header 'X-ShareIt-Token' mitsenden.
+    """
     url = api_base.rstrip("/") + "/api/upload"
+    headers = {}
+    if token:
+        headers["X-ShareIt-Token"] = token.strip()
     with open(file_path, "rb") as f:
         files = {"file": (file_path.name, f)}
         data = {"expires_in_days": str(expires)}
-        resp = requests.post(url, files=files, data=data, timeout=300)
+        resp = requests.post(url, files=files, data=data, headers=headers, timeout=300)
         resp.raise_for_status()
         return resp.json()
 
@@ -163,7 +169,7 @@ class App(tk.Tk):
 
         def worker():
             try:
-                data = upload_file(api, self.selected_file, expires)
+                data = upload_file(api, self.selected_file, expires, self.settings.get("upload_token"))
                 if data.get("ok"):
                     self.last_link = data.get("download_url")
                     self.logln(f"Fertig. Download-Link: {self.last_link}")
@@ -418,7 +424,7 @@ class App(tk.Tk):
 
     # Settings management
     def load_settings(self) -> dict:
-        defaults = {"api_url": "http://127.0.0.1:8000", "host": "127.0.0.1", "port": 8000}
+        defaults = {"api_url": "http://127.0.0.1:8000", "host": "127.0.0.1", "port": 8000, "upload_token": ""}
         try:
             if self.config_path.exists():
                 with open(self.config_path, "r", encoding="utf-8") as f:
@@ -446,9 +452,11 @@ class App(tk.Tk):
         except Exception:
             port = 8000
         url = new_settings.get("api_url") or f"http://{host}:{port}"
-        self.settings = {"api_url": url.strip(), "host": host.strip(), "port": port}
+        upload_token = new_settings.get("upload_token", "")
+        self.settings = {"api_url": url.strip(), "host": host.strip(), "port": port, "upload_token": upload_token}
         self.save_settings()
-        self.logln(f"Einstellungen gespeichert. API: {self.settings['api_url']}")
+        masked = (upload_token[:4] + "***") if upload_token else "(kein Token)"
+        self.logln(f"Einstellungen gespeichert. API: {self.settings['api_url']} | Token: {masked}")
 
 
 class SettingsWindow(tk.Toplevel):
@@ -476,8 +484,18 @@ class SettingsWindow(tk.Toplevel):
         self.port_var = tk.StringVar(value=str(current.get("port", 8000)))
         ttk.Entry(frm, textvariable=self.port_var, width=10).grid(row=2, column=1, sticky="w", **pad)
 
+        ttk.Label(frm, text="Upload Token").grid(row=3, column=0, sticky="w", **pad)
+        self.token_var = tk.StringVar(value=current.get("upload_token", ""))
+        token_entry = ttk.Entry(frm, textvariable=self.token_var, width=40, show="*")
+        token_entry.grid(row=3, column=1, sticky="ew", **pad)
+        # Checkbox zum Anzeigen
+        def toggle_show():
+            token_entry.config(show="" if show_var.get() else "*")
+        show_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(frm, text="anzeigen", variable=show_var, command=toggle_show).grid(row=3, column=2, sticky="w")
+
         btns = ttk.Frame(frm)
-        btns.grid(row=3, column=0, columnspan=2, sticky="e", **pad)
+        btns.grid(row=4, column=0, columnspan=3, sticky="e", **pad)
         ttk.Button(btns, text="Abbrechen", command=self.destroy).pack(side=tk.RIGHT, padx=5)
         ttk.Button(btns, text="Speichern", command=self._save).pack(side=tk.RIGHT)
 
@@ -488,6 +506,7 @@ class SettingsWindow(tk.Toplevel):
             "api_url": self.api_var.get().strip(),
             "host": self.host_var.get().strip(),
             "port": self.port_var.get().strip(),
+            "upload_token": self.token_var.get().strip(),
         }
         try:
             self.on_save(data)
