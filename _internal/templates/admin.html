@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Admin Konfiguration - Share‑It</title>
+    <link rel="stylesheet" href="/static/style.css" />
+    <link rel="stylesheet" href="/static/admin.css" />
+  </head>
+  <body>
+    <nav class="admin-nav">
+      <div class="nav-container">
+        <h1>⚙️ Share‑It Admin</h1>
+        <div class="nav-links">
+          <a href="/">🏠 Hauptseite</a>
+          <a href="/admin" class="active">⚙️ Konfiguration</a>
+        </div>
+      </div>
+    </nav>
+
+    <main class="admin-container">
+      <!-- Status Overview -->
+      <section class="status-section">
+        <h2>📊 System Status</h2>
+        <div class="status-grid">
+          <div class="status-card">
+            <h3>🌐 Deine IP</h3>
+            <p id="currentIp" class="status-value">{{ access_info.client_ip if access_info else 'N/A' }}</p>
+            <p class="status-label">
+              {% if access_info and access_info.is_internal %}
+              <span class="internal">🔒 Intern</span>
+              {% else %}
+              <span class="external">🌍 Extern</span>
+              {% endif %}
+            </p>
+          </div>
+          
+          <div class="status-card">
+            <h3>📁 Gespeicherte Dateien</h3>
+            <p id="totalFiles" class="status-value">-</p>
+            <p class="status-label">Gesamtanzahl</p>
+          </div>
+          
+          <div class="status-card">
+            <h3>🗑️ Abgelaufene Dateien</h3>
+            <p id="expiredFiles" class="status-value">-</p>
+            <p class="status-label">Zur Löschung bereit</p>
+          </div>
+          
+          <div class="status-card">
+            <h3>🔄 Cleanup Service</h3>
+            <p id="cleanupStatus" class="status-value">-</p>
+            <p class="status-label">Automatisches Cleanup</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Configuration Forms -->
+      <div class="config-grid">
+        
+        <!-- VPN/Network Configuration -->
+        <section class="config-section">
+          <h2>🌐 VPN & Netzwerk Konfiguration</h2>
+          <form id="networkForm" class="config-form">
+            
+            <div class="form-group">
+              <label for="internalNetworks">Interne Netzwerke (CIDR)</label>
+              <textarea 
+                id="internalNetworks" 
+                name="internal_networks" 
+                rows="4" 
+                placeholder="192.168.0.0/16&#10;10.0.0.0/8&#10;172.16.0.0/12&#10;127.0.0.1/32"
+              >{{ config.internal_networks if config else '' }}</textarea>
+              <small class="help-text">Ein Netzwerk pro Zeile im CIDR-Format (z.B. 10.8.0.0/24)</small>
+            </div>
+
+            <div class="form-group">
+              <label class="checkbox-label">
+                <input 
+                  type="checkbox" 
+                  id="allowExternalUpload" 
+                  name="allow_external_upload"
+                  {{ 'checked' if config and config.allow_external_upload else '' }}
+                />
+                <span class="checkmark"></span>
+                Upload für externe IPs erlauben
+              </label>
+              <small class="help-text warning">⚠️ Nicht empfohlen für Produktionsumgebung</small>
+            </div>
+
+            <button type="submit" class="btn-primary">Netzwerk-Einstellungen speichern</button>
+          </form>
+        </section>
+
+        <!-- App Configuration -->
+        <section class="config-section">
+          <h2>📱 App Konfiguration</h2>
+          <form id="appForm" class="config-form">
+            
+            <div class="form-group">
+              <label for="baseUrl">Basis URL</label>
+              <input 
+                type="url" 
+                id="baseUrl" 
+                name="base_url" 
+                placeholder="https://files.deine-domain.com"
+                value="{{ config.base_url if config else '' }}"
+              />
+              <small class="help-text">Öffentliche URL deiner App (optional)</small>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label for="defaultExpireDays">Standard Ablaufzeit (Tage)</label>
+                <input 
+                  type="number" 
+                  id="defaultExpireDays" 
+                  name="default_expire_days" 
+                  min="1" 
+                  max="365" 
+                  value="{{ config.default_expire_days if config else 7 }}"
+                />
+              </div>
+
+              <div class="form-group">
+                <label for="maxExpireDays">Maximum Ablaufzeit (Tage)</label>
+                <input 
+                  type="number" 
+                  id="maxExpireDays" 
+                  name="max_expire_days" 
+                  min="1" 
+                  max="365" 
+                  value="{{ config.max_expire_days if config else 30 }}"
+                />
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label for="cleanupInterval">Cleanup Intervall (Stunden)</label>
+              <input 
+                type="number" 
+                id="cleanupInterval" 
+                name="cleanup_interval_hours" 
+                min="0.1" 
+                max="168" 
+                step="0.1" 
+                value="{{ config.cleanup_interval_hours if config else 1 }}"
+              />
+              <small class="help-text">Wie oft sollen abgelaufene Dateien gelöscht werden</small>
+            </div>
+
+            <button type="submit" class="btn-primary">App-Einstellungen speichern</button>
+          </form>
+        </section>
+      </div>
+
+      <!-- Actions Section -->
+      <section class="actions-section">
+        <h2>🔧 Admin Aktionen</h2>
+        <div class="actions-grid">
+          
+          <div class="action-card">
+            <h3>🗑️ Abgelaufene Dateien löschen</h3>
+            <p>Führt sofort ein Cleanup aller abgelaufenen Dateien durch</p>
+            <button id="manualCleanup" class="btn-warning">Jetzt aufräumen</button>
+          </div>
+
+          <div class="action-card">
+            <h3>� Ablaufzeiten aktualisieren</h3>
+            <p>Aktualisiert alle Ablaufzeiten basierend auf aktueller Konfiguration</p>
+            <button id="updateExpiry" class="btn-secondary">Ablaufzeiten aktualisieren</button>
+          </div>
+
+          <div class="action-card">
+            <h3>�💥 ALLE Dateien löschen</h3>
+            <p style="color: red; font-weight: bold;">⚠️ VORSICHT: Löscht ALLE Dateien unwiderruflich!</p>
+            <button id="purgeAll" class="btn-danger">Alle löschen</button>
+          </div>
+
+          <div class="action-card">
+            <h3>🔄 Status aktualisieren</h3>
+            <p>Lädt alle Status-Informationen neu</p>
+            <button id="refreshStatus" class="btn-secondary">Status neu laden</button>
+          </div>
+
+          <div class="action-card">
+            <h3>📋 Konfiguration exportieren</h3>
+            <p>Lädt aktuelle Konfiguration als Datei herunter</p>
+            <button id="exportConfig" class="btn-secondary">Export</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Status Messages -->
+      <div id="statusMessage" class="status-message hidden">
+        <span id="statusText"></span>
+      </div>
+
+    </main>
+
+    <script src="/static/admin.js"></script>
+  </body>
+</html>

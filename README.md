@@ -232,6 +232,25 @@ curl http://localhost:8000/api/access-info
 INTERNAL_NETWORKS="deine-vpn-ip/24" python -m uvicorn app:app
 ```
 
+## Building the admin desktop EXE (Windows)
+
+A helper script `build_admin_exe.ps1` is included to create a single-file EXE using PyInstaller.
+
+Steps (PowerShell):
+
+1. Create and activate a venv in the project root:
+  .\.venv\Scripts\activate; python -m pip install -r requirements.txt
+
+2. Run the build helper (uses the venv python):
+  .\build_admin_exe.ps1
+
+The built executable will be in `dist\admin_desktop`.
+
+Notes and troubleshooting:
+- If your app uses templates/static assets, ensure `templates/` and `static/` are present — the spec bundles them.
+- Windows Explorer caches icons. If the tray icon or exe icon doesn't update after rebuilding, try restarting Explorer or log out/in.
+
+
 #### Problem: Externe IPs werden als intern erkannt
 **Lösung:** Netzwerk-Bereiche einschränken
 ```bash
