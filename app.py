@@ -196,10 +196,19 @@ def compute_expiry(days: int | None) -> str | None:
 
 
 def public_download_url(token: str, request: Request) -> str:
-# Bevorzugt BASE_URL, ansonsten Host aus Request
+    # Bevorzugt BASE_URL, ansonsten Host und Scheme aus Request
     if BASE_URL:
         return f"{BASE_URL}/d/{token}"
-    base = str(request.base_url).rstrip("/")
+
+    # FastAPI's request.url.scheme reflektiert https wenn TLS aktiv ist
+    scheme = getattr(request.url, 'scheme', None) or 'http'
+    host = str(request.base_url).rstrip("/")
+    # base may already include scheme, so ensure we don't duplicate
+    if host.startswith('http://') or host.startswith('https://'):
+        base = host
+    else:
+        base = f"{scheme}://{host.lstrip('/')}"
+
     return f"{base}/d/{token}"
 
 

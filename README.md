@@ -250,6 +250,22 @@ Notes and troubleshooting:
 - If your app uses templates/static assets, ensure `templates/` and `static/` are present — the spec bundles them.
 - Windows Explorer caches icons. If the tray icon or exe icon doesn't update after rebuilding, try restarting Explorer or log out/in.
 
+## Running with TLS / HTTPS
+
+You can run the app with HTTPS by supplying a certificate and key to the `start_server.ps1` helper. When TLS is active, generated download links will use `https://` (unless `BASE_URL` is explicitly configured).
+
+Example (PowerShell):
+
+```powershell
+# Run with TLS
+.\start_server.ps1 -Port 8443 -BindHost 0.0.0.0 -CertFile C:\path\to\fullchain.pem -KeyFile C:\path\to\privkey.pem
+```
+
+Notes:
+- `BASE_URL` (env var or configured via Admin) takes precedence for generated public links. Set `BASE_URL` to an https URL (e.g. `https://files.example.com`) if you run behind a reverse proxy or want a stable public URL.
+- Uvicorn must be able to read the certificate and private key files. If you use a reverse proxy (nginx, Caddy), it's usually better to terminate TLS there and set `BASE_URL` accordingly.
+- If you use a self-signed certificate for testing, your browser will warn about the certificate unless you add it to your trust store.
+
 
 #### Problem: Externe IPs werden als intern erkannt
 **Lösung:** Netzwerk-Bereiche einschränken

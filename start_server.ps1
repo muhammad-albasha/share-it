@@ -1,6 +1,8 @@
 param(
     [int]$Port = 8000,
-    [string]$BindHost = "0.0.0.0"
+    [string]$BindHost = "0.0.0.0",
+    [string]$CertFile = "",
+    [string]$KeyFile = ""
 )
 
 # Pfade
@@ -25,6 +27,16 @@ if (Test-Path $pidFile) {
 }
 
 $args = "-m uvicorn app:app --host $BindHost --port $Port"
+
+# If both certificate and key are provided and exist, add SSL args
+if ($CertFile -and $KeyFile) {
+    if (-not (Test-Path $CertFile)) { Write-Error "Certificate file not found: $CertFile"; exit 1 }
+    if (-not (Test-Path $KeyFile)) { Write-Error "Key file not found: $KeyFile"; exit 1 }
+    $args += " --ssl-keyfile `"$KeyFile`" --ssl-certfile `"$CertFile`""
+    Write-Host "TLS enabled: cert=$CertFile, key=$KeyFile"
+} elseif ($CertFile -or $KeyFile) {
+    Write-Error "Both CertFile and KeyFile must be provided to enable TLS."; exit 1
+}
 Write-Host "Starte Server: $venvPython $args"
 
 # Verwende pythonw.exe aus dem venv wenn vorhanden (versteckt Fenster)
