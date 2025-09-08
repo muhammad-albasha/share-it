@@ -71,7 +71,7 @@ class App(tk.Tk):
         ttk.Button(frm, text="Auswählen", command=self.choose_file).grid(row=1, column=3, sticky="e", **pad)
 
         ttk.Label(frm, text="Ablauf (Tage, 0 = One-Time-Download)").grid(row=2, column=0, sticky="w", **pad)
-        self.expires = tk.IntVar(value=7)
+        self.expires = tk.IntVar(value=2)
         # Integer-Schieberegler mit Schrittweite 1 und Anzeige
         self.exp_scale = tk.Scale(
             frm,
@@ -84,7 +84,7 @@ class App(tk.Tk):
             command=self._on_exp_change,
         )
         self.exp_scale.grid(row=2, column=1, columnspan=2, sticky="ew", **pad)
-        self.exp_value_lbl = ttk.Label(frm, text="7")
+        self.exp_value_lbl = ttk.Label(frm, text="2")
         self.exp_value_lbl.grid(row=2, column=3, sticky="e", **pad)
 
         self.upload_btn = ttk.Button(frm, text="Hochladen", command=self.on_upload, state=tk.DISABLED)
