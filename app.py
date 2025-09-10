@@ -576,6 +576,53 @@ async def periodic_cleanup():
             await asyncio.sleep(60)  # Bei Fehler nur 1 Minute warten
 
 # =====================
+# Helper Functions for HTML Pages
+# =====================
+
+def create_error_page(title: str, message: str, description: str, status_code: int = 404) -> HTMLResponse:
+    """Erstellt eine stilisierte Fehlerseite mit dem gleichen Design wie die normale Download-Seite"""
+    html_content = f"""<!DOCTYPE html>
+<html lang='de'>
+<head>
+    <meta charset='utf-8'/>
+    <title>{BRAND_NAME} – {title}</title>
+    <meta name='viewport' content='width=device-width,initial-scale=1'/>
+    <style>
+        body{{font-family:system-ui,-apple-system,Segoe UI,Arial,sans-serif;background:{BRAND_BG};color:{BRAND_TEXT};margin:0;padding:0;}}
+        header{{background:{BRAND_COLOR};padding:16px 40px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;box-shadow:0 2px 4px rgba(0,0,0,.12);}}
+        header img{{height:60px;object-fit:contain;filter:drop-shadow(0 2px 4px rgba(0,0,0,.25))}}
+        header .title{{font-size:0.95rem;font-weight:600;letter-spacing:.5px;color:#fff;opacity:.9;text-transform:uppercase}}
+        main{{padding:3.2rem 2rem 4rem;display:flex;justify-content:center}}
+        .card{{width:100%;max-width:880px;background:linear-gradient(145deg,{BRAND_SOFT} 0%,#fff 60%);border:1px solid #d8dee6;border-radius:26px;padding:3rem 3.4rem 3.2rem;box-shadow:0 10px 38px -12px rgba(0,0,0,.18),0 4px 18px -6px rgba(0,0,0,.08);}}
+        .headline{{margin:0 0 1.4rem;font-size:1.85rem;line-height:1.18;font-weight:650;letter-spacing:.3px;color:#c44;}}
+        .message{{margin:1.2rem 0 2rem;line-height:1.65;font-size:1.02rem;font-weight:500;}}
+        .description{{margin:1.2rem 0 2rem;line-height:1.65;font-size:0.95rem;opacity:0.75;}}
+        .icon{{font-size:4rem;margin-bottom:1rem;opacity:0.3;text-align:center;}}
+        .note{{margin-top:2.1rem;font-size:.75rem;opacity:.58;line-height:1.55;letter-spacing:.3px}}
+        @media (max-width:860px){{.card{{padding:2.4rem 2rem 2.6rem;border-radius:20px}}.headline{{font-size:1.6rem}}.message{{font-size:.97rem;margin:1rem 0 1.6rem}}.note{{margin-top:1.6rem}}}}
+        @media (max-width:520px){{header{{padding:8px 18px}}header img{{height:46px}}.card{{padding:2.1rem 1.4rem 2.3rem;border-radius:0;box-shadow:none}}.headline{{font-size:1.45rem}}.message{{font-size:.95rem}}}}
+    </style>
+</head>
+<body>
+    <header>
+        <img src='{BRAND_LOGO}' alt='Logo' onerror="this.style.display='none'"/>
+        <div class='title'>{BRAND_NAME}</div>
+    </header>
+    <main>
+        <div class='card'>
+            <div class='icon'>⚠️</div>
+            <h1 class='headline'>{title}</h1>
+            <div class='message'>{message}</div>
+            <div class='description'>{description}</div>
+            <div class='note'>Falls Sie Unterstützung benötigen, wenden Sie sich an den Administrator.</div>
+        </div>
+    </main>
+</body>
+</html>"""
+    return HTMLResponse(html_content, status_code=status_code)
+
+
+# =====================
 # Routes
 # =====================
 
@@ -705,7 +752,16 @@ async def upload(request: Request, file: UploadFile = File(...), expires_in_days
 async def download(token: str, background_tasks: BackgroundTasks, request: Request, raw: bool = False):
     with get_db() as conn:
         row = conn.execute("SELECT * FROM files WHERE token = ?", (token,)).fetchone()
+    
+    # Check if client wants HTML (for browser requests)
+    accept_header = request.headers.get("accept", "") if request else ""
+    wants_html = (not raw) and ("text/html" in accept_header or "*/*" in accept_header)
+    
     if not row:
+        if wants_html:
+            return create_error_page("Link nicht gefunden", 
+                                   "Der angeforderte Download-Link existiert nicht oder wurde bereits entfernt.",
+                                   "Bitte überprüfen Sie den Link oder fordern Sie einen neuen an.")
         raise HTTPException(status_code=404, detail="Link nicht gefunden.")
 
 
@@ -723,6 +779,11 @@ async def download(token: str, background_tasks: BackgroundTasks, request: Reque
                 with get_db() as conn:
                     conn.execute("DELETE FROM files WHERE token = ?", (token,))
                     conn.commit()
+                if wants_html:
+                    return create_error_page("Link abgelaufen", 
+                                           "Dieser Download-Link ist abgelaufen und nicht mehr verfügbar.",
+                                           "Die Datei wurde automatisch entfernt. Bitte fordern Sie einen neuen Link an.",
+                                           status_code=410)
                 raise HTTPException(status_code=410, detail="Link abgelaufen.")
         except ValueError:
             pass
@@ -738,6 +799,10 @@ async def download(token: str, background_tasks: BackgroundTasks, request: Reque
     if storage_mode == "local":
         path = Path(path_value)
         if not os.path.exists(path):
+            if wants_html:
+                return create_error_page("Datei nicht verfügbar", 
+                                       "Die angeforderte Datei ist nicht mehr im Speicher vorhanden.",
+                                       "Die Datei wurde möglicherweise verschoben oder gelöscht. Bitte fordern Sie einen neuen Upload an.")
             raise HTTPException(status_code=404, detail="Datei nicht mehr vorhanden.")
     else:
         # Für S3 prüfen wir nicht zwingend Existenz (presign erzeugt sonst Fehler)
@@ -896,11 +961,11 @@ async def download(token: str, background_tasks: BackgroundTasks, request: Reque
         
     except Exception as e:
         logger.error(f"❌ Error during file download: {e}")
-        if "text/html" in accept_header:
-            return HTMLResponse(
-                f"""<!DOCTYPE html><html lang='de'><head><meta charset='utf-8'/><title>Fehler</title><style>body{{font-family:system-ui,Arial,sans-serif;background:#111;color:#eee;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0}}.box{{max-width:520px;background:#1e242b;padding:2rem 2.2rem;border:1px solid #2b323b;border-radius:14px;box-shadow:0 8px 28px -6px rgba(0,0,0,.6)}}h1{{margin-top:0;font-size:1.35rem}}code{{background:#000;padding:.25rem .45rem;border-radius:6px;font-size:.75rem}}</style></head><body><div class='box'><h1>Fehler beim Download</h1><p>Die Datei konnte nicht bereitgestellt werden.</p><p><code>{str(e)}</code></p><p>Bitte versuche es erneut oder fordere einen neuen Link an.</p></div></body></html>""",
-                status_code=500,
-            )
+        if wants_html:
+            return create_error_page("Fehler beim Download", 
+                                   "Die Datei konnte nicht bereitgestellt werden.",
+                                   f"Technischer Fehler: {str(e)[:100]}... Bitte versuchen Sie es erneut oder fordern Sie einen neuen Link an.",
+                                   status_code=500)
         raise HTTPException(status_code=500, detail="Fehler beim Download")
 
 # Note: The HTML admin page was removed to keep backend API-only.
