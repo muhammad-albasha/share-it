@@ -36,7 +36,7 @@ CONFIG_PATH = BASE_DIR / "config.json"
 
 # BASE_URL: Public URL deiner App (ohne Slash am Ende). Für lokale Tests leer lassen.
 BASE_URL = os.getenv("BASE_URL", "") # z.B. "https://files.dein-domain.tld"
-DEFAULT_EXPIRE_DAYS = int(os.getenv("DEFAULT_EXPIRE_DAYS", "7"))
+DEFAULT_EXPIRE_DAYS = int(os.getenv("DEFAULT_EXPIRE_DAYS", "2"))
 MAX_EXPIRE_DAYS = int(os.getenv("MAX_EXPIRE_DAYS", "30"))
 CLEANUP_INTERVAL_HOURS = int(os.getenv("CLEANUP_INTERVAL_HOURS", "1"))  # Cleanup alle X Stunden
 
@@ -793,7 +793,6 @@ async def download(token: str, background_tasks: BackgroundTasks, request: Reque
             f".one-time{{color:{BRAND_ACCENT};font-weight:600;margin-top:.6rem;font-size:.95rem}}",
             "@media (max-width:860px){.card{padding:2.4rem 2rem 2.6rem;border-radius:20px}.headline{font-size:1.6rem}.meta{font-size:.97rem;margin:1rem 0 1.6rem}.btn{width:100%;justify-content:center;padding:1rem 1.4rem;font-size:1.05rem;border-radius:16px}.note{margin-top:1.6rem}}@media (max-width:520px){header{padding:8px 18px}header img{height:46px}.card{padding:2.1rem 1.4rem 2.3rem;border-radius:0;box-shadow:none}.headline{font-size:1.45rem}.meta{font-size:.95rem}.btn{padding:.95rem 1.2rem;font-size:1rem}}",
             "</style>",
-            "<script>window.addEventListener('DOMContentLoaded',function(){var a=document.getElementById('dl'); if(a){ setTimeout(function(){ a.click(); },750); }});</script>",
             "</head><body><header>" ,
             f"<img src='{BRAND_LOGO}' alt='Logo' onerror=\"this.style.display='none'\"/>",
             f"<div class='title'>{BRAND_NAME}</div>",
@@ -809,7 +808,7 @@ async def download(token: str, background_tasks: BackgroundTasks, request: Reque
         html_parts.extend([
             "</div>",
             f"<a id='dl' class='btn' href='{raw_url}' rel='noopener'>Jetzt herunterladen</a>",
-            "<div class='note'>Automatischer Start in Kürze – falls nicht, bitte Button klicken. Vertraulich behandeln.</div>",
+            "<div class='note'>Klicken Sie auf den Button, um den Download zu starten. Vertraulich behandeln.</div>",
             "</div></main></body></html>",
         ])
         return HTMLResponse("".join(html_parts))
