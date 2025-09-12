@@ -60,8 +60,15 @@ class App(tk.Tk):
         self.selected_file = None
         self.last_link = None
         base_dir = _app_dir()
-        self.config_path = base_dir / "frontend_config.json"
-        self.history_path = base_dir / "frontend_history.json"
+        # Use new filenames; migrate legacy ones if they exist
+        self.config_path = base_dir / "config.json"
+        self.history_path = base_dir / "history.json"
+        try:
+            self._migrate_legacy_file(base_dir / "frontend_config.json", self.config_path)
+            self._migrate_legacy_file(base_dir / "frontend_history.json", self.history_path)
+        except Exception:
+            # Migration errors are non-fatal; continue with defaults
+            pass
         self.settings = self.load_settings()
         self.history = self.load_history()
         # Mapping: Treeview item id -> URL (URL wird nicht mehr als Spalte angezeigt)
@@ -151,6 +158,33 @@ class App(tk.Tk):
         frm.columnconfigure(2, weight=1)
         frm.rowconfigure(6, weight=1)
         frm.rowconfigure(8, weight=1)
+
+    def _migrate_legacy_file(self, old_path: Path, new_path: Path):
+        """Rename legacy JSON files to new names once, preserving data.
+        If the old file exists and the new one doesn't, attempt rename; fallback to copy.
+        """
+        try:
+            if old_path.exists() and not new_path.exists():
+                try:
+                    old_path.rename(new_path)
+                except Exception:
+                    # Fallback: copy contents
+                    try:
+                        with open(old_path, "r", encoding="utf-8") as fsrc:
+                            data = fsrc.read()
+                        with open(new_path, "w", encoding="utf-8") as fdst:
+                            fdst.write(data)
+                        try:
+                            old_path.unlink()
+                        except Exception:
+                            pass
+                    except Exception:
+                        # If copying fails, leave files as-is
+                        pass
+                self.logln(f"Datei migriert: {old_path.name} -> {new_path.name}")
+        except Exception:
+            # Ignore migration issues silently in production
+            pass
 
     def logln(self, msg: str):
         self.log.configure(state=tk.NORMAL)
