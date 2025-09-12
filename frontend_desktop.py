@@ -1,4 +1,5 @@
 import os
+import sys
 import json
 import threading
 import time
@@ -35,14 +36,21 @@ def upload_file(api_base: str, file_path: Path, expires: int, token: str | None 
         return resp.json()
 
 
+def _app_dir() -> Path:
+    """Return directory for config/history: next to .exe when frozen, else script dir."""
+    if getattr(sys, "frozen", False):  # PyInstaller onefile
+        return Path(sys.executable).parent
+    return Path(__file__).parent
+
+
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("DateiLink")
         self.geometry("820x560")
 
-        # Modernes Icon setzen
-        icon_path = Path(__file__).parent / "static" / "dateilink.ico"
+        # Modernes Icon setzen (neben .exe bzw. Skript in ./static)
+        icon_path = _app_dir() / "static" / "dateilink.ico"
         if icon_path.exists():
             try:
                 self.iconbitmap(str(icon_path))
@@ -51,8 +59,9 @@ class App(tk.Tk):
 
         self.selected_file = None
         self.last_link = None
-        self.config_path = Path(__file__).with_name("frontend_config.json")
-        self.history_path = Path(__file__).with_name("frontend_history.json")
+        base_dir = _app_dir()
+        self.config_path = base_dir / "frontend_config.json"
+        self.history_path = base_dir / "frontend_history.json"
         self.settings = self.load_settings()
         self.history = self.load_history()
         # Mapping: Treeview item id -> URL (URL wird nicht mehr als Spalte angezeigt)
