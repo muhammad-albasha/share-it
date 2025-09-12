@@ -128,7 +128,7 @@ def ensure_bucket():
             logger.warning(f"S3 head_bucket Fehler: {e}")
 
 def s3_object_key(file_id: str, suffix: str) -> str:
-    return f"shareit/{file_id}{suffix}"  # Namespace
+    return f"dateilink/{file_id}{suffix}"  # Namespace
 
 def upload_stream_to_s3(file_like, key: str, content_type: str):
     client = get_s3_client()
@@ -219,7 +219,7 @@ current_config = load_config()
 update_runtime_config(current_config)
 
 
-app = FastAPI(title="Share-It API", description="API backend for Share-It file sharing service (no UI)")
+app = FastAPI(title="DateiLink API", description="API backend for DateiLink file sharing service (no UI)")
 
 # Static files (logo etc.) if present
 static_dir = BASE_DIR / "static"
@@ -383,7 +383,7 @@ def check_upload_permission(request: Request) -> bool:
 
     # 2) Token-Bypass (Header oder Query) – ermöglicht sicheren externen Upload ohne ganze Welt freizugeben
     if UPLOAD_TOKEN:
-        token_header = request.headers.get("X-ShareIt-Token") or request.headers.get("X-Shareit-Token")
+        token_header = request.headers.get("X-DateiLink-Token") or request.headers.get("X-Dateilink-Token")
         if not token_header:
             token_header = request.query_params.get("token")  # Fallback Query Param
         if token_header:
@@ -631,7 +631,7 @@ def create_error_page(title: str, message: str, description: str, status_code: i
 async def root(request: Request):
     """Minimal API landing endpoint (no UI)."""
     return {
-        "name": "Share-It API",
+        "name": "DateiLink API",
         "version": 1,
         "message": "This instance runs in API-only mode (no web UI).",
         "docs": f"{str(request.base_url).rstrip('/')}/docs",

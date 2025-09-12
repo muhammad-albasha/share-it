@@ -21,12 +21,12 @@ def human_bytes(num: int) -> str:
 
 def upload_file(api_base: str, file_path: Path, expires: int, token: str | None = None) -> dict:
     """Upload Datei zum Backend.
-    Wenn token gesetzt -> Header 'X-ShareIt-Token' mitsenden.
+    Wenn token gesetzt -> Header 'X-DateiLink-Token' mitsenden.
     """
     url = api_base.rstrip("/") + "/api/upload"
     headers = {}
     if token:
-        headers["X-ShareIt-Token"] = token.strip()
+        headers["X-DateiLink-Token"] = token.strip()
     with open(file_path, "rb") as f:
         files = {"file": (file_path.name, f)}
         data = {"expires_in_days": str(expires)}
@@ -38,12 +38,16 @@ def upload_file(api_base: str, file_path: Path, expires: int, token: str | None 
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("Share-It")
+        self.title("DateiLink")
         self.geometry("820x560")
-        try:
-            self.iconbitmap(default='')
-        except Exception:
-            pass
+
+        # Modernes Icon setzen
+        icon_path = Path(__file__).parent / "static" / "dateilink.ico"
+        if icon_path.exists():
+            try:
+                self.iconbitmap(str(icon_path))
+            except Exception:
+                pass
 
         self.selected_file = None
         self.last_link = None
@@ -51,6 +55,8 @@ class App(tk.Tk):
         self.history_path = Path(__file__).with_name("frontend_history.json")
         self.settings = self.load_settings()
         self.history = self.load_history()
+        # Mapping: Treeview item id -> URL (URL wird nicht mehr als Spalte angezeigt)
+        self.row_url = {}
 
         self._build_ui()
         self.refresh_uploads_list()
@@ -65,8 +71,9 @@ class App(tk.Tk):
         frm = ttk.Frame(self)
         frm.pack(fill=tk.BOTH, expand=True)
 
-        title = ttk.Label(frm, text="Share-It", font=("Segoe UI", 13, "bold"))
+        title = ttk.Label(frm, text="DateiLink", font=("Segoe UI", 13, "bold"))
         title.grid(row=0, column=0, columnspan=3, sticky="w", **pad)
+
         self.settings_btn = ttk.Button(frm, text="Einstellungen", command=self.open_settings)
         self.settings_btn.grid(row=0, column=3, sticky="e", **pad)
 
@@ -78,16 +85,9 @@ class App(tk.Tk):
 
         ttk.Label(frm, text="Ablauf (Tage, 0 = One-Time-Download)").grid(row=2, column=0, sticky="w", **pad)
         self.expires = tk.IntVar(value=2)
-        # Integer-Schieberegler mit Schrittweite 1 und Anzeige
         self.exp_scale = tk.Scale(
-            frm,
-            from_=0,
-            to=30,
-            orient=tk.HORIZONTAL,
-            resolution=1,
-            showvalue=False,
-            variable=self.expires,
-            command=self._on_exp_change,
+            frm, from_=0, to=30, orient=tk.HORIZONTAL, resolution=1,
+            showvalue=False, variable=self.expires, command=self._on_exp_change
         )
         self.exp_scale.grid(row=2, column=1, columnspan=2, sticky="ew", **pad)
         self.exp_value_lbl = ttk.Label(frm, text="2")
@@ -105,30 +105,38 @@ class App(tk.Tk):
         sep1.grid(row=4, column=0, columnspan=4, sticky="ew", **pad)
 
         ttk.Label(frm, text="Meine Uploads (nicht abgelaufen)", font=("Segoe UI", 10, "bold")).grid(row=5, column=0, columnspan=2, sticky="w", **pad)
-        self.uploads_tree = ttk.Treeview(frm, columns=("name","expires","url"), show="headings", height=8)
+        # URL nicht anzeigen: nur Datei und Ablauf
+        self.uploads_tree = ttk.Treeview(frm, columns=("name", "expires"), show="headings", height=8)
         self.uploads_tree.heading("name", text="Datei")
         self.uploads_tree.heading("expires", text="Läuft ab")
-        self.uploads_tree.heading("url", text="URL")
-        self.uploads_tree.column("name", width=260)
-        self.uploads_tree.column("expires", width=160)
-        self.uploads_tree.column("url", width=300)
+        self.uploads_tree.column("name", width=420)
+        self.uploads_tree.column("expires", width=180)
         self.uploads_tree.grid(row=6, column=0, columnspan=4, sticky="nsew", **pad)
         self.uploads_tree.bind("<<TreeviewSelect>>", self._on_tree_select)
 
         btn_bar = ttk.Frame(frm)
         btn_bar.grid(row=7, column=0, columnspan=4, sticky="w", **pad)
         self.copy_sel_btn = ttk.Button(btn_bar, text="Link kopieren", command=self.copy_selected, state=tk.DISABLED)
-        self.copy_sel_btn.pack(side=tk.LEFT, padx=(0,6))
+        self.copy_sel_btn.pack(side=tk.LEFT, padx=(0, 6))
         self.open_sel_btn = ttk.Button(btn_bar, text="Im Browser öffnen", command=self.open_selected, state=tk.DISABLED)
-        self.open_sel_btn.pack(side=tk.LEFT, padx=(0,6))
+        self.open_sel_btn.pack(side=tk.LEFT, padx=(0, 6))
         self.remove_sel_btn = ttk.Button(btn_bar, text="Aus Liste entfernen", command=self.remove_selected, state=tk.DISABLED)
-        self.remove_sel_btn.pack(side=tk.LEFT, padx=(0,6))
+        self.remove_sel_btn.pack(side=tk.LEFT, padx=(0, 6))
         ttk.Button(btn_bar, text="Aktualisieren", command=self.refresh_uploads_click).pack(side=tk.LEFT)
 
         # Log unten
         self.log = tk.Text(frm, height=8)
         self.log.grid(row=8, column=0, columnspan=4, sticky="nsew", **pad)
         self.log.configure(state=tk.DISABLED)
+
+        # Powered by link at the bottom
+        powered_by_frame = ttk.Frame(frm)
+        powered_by_frame.grid(row=9, column=0, columnspan=4, sticky="ew", padx=8, pady=(0, 6))
+        hirsch_lorenz_link = ttk.Label(powered_by_frame, text="Hirsch-Lorenz", font=("Segoe UI", 9), foreground="blue", cursor="hand2")
+        hirsch_lorenz_link.pack(side=tk.RIGHT)
+        hirsch_lorenz_link.bind("<Button-1>", lambda e: webbrowser.open("https://hirsch-lorenz.de"))
+        powered_by_text = ttk.Label(powered_by_frame, text="Powered by ", font=("Segoe UI", 9))
+        powered_by_text.pack(side=tk.RIGHT)
 
         frm.columnconfigure(1, weight=1)
         frm.columnconfigure(2, weight=1)
@@ -287,6 +295,7 @@ class App(tk.Tk):
             self.save_history()
 
         # Liste neu füllen
+        self.row_url.clear()
         for row in self.uploads_tree.get_children():
             self.uploads_tree.delete(row)
         for it in self.history:
@@ -294,7 +303,9 @@ class App(tk.Tk):
             exp = it.get("expires_at") or "nie/one-time"
 
             url = it.get("download_url") or ""
-            self.uploads_tree.insert("", tk.END, values=(name, exp, url))
+            iid = self.uploads_tree.insert("", tk.END, values=(name, exp))
+            # URL pro Zeile merken (nicht sichtbar)
+            self.row_url[str(iid)] = url
         self._update_sel_buttons()
 
     def refresh_uploads_click(self):
@@ -310,9 +321,13 @@ class App(tk.Tk):
         sel = self.uploads_tree.selection()
         if not sel:
             return None
-        vals = self.uploads_tree.item(sel[0], "values")
-        # values: (name, expires, url)
-        return vals
+        iid = sel[0]
+        vals = self.uploads_tree.item(iid, "values")
+        # values: (name, expires) – URL separat gemappt
+        name = vals[0] if len(vals) > 0 else ""
+        expires = vals[1] if len(vals) > 1 else ""
+        url = self.row_url.get(str(iid), "")
+        return (name, expires, url)
 
     def _update_sel_buttons(self):
         enabled = tk.NORMAL if self.uploads_tree.selection() else tk.DISABLED

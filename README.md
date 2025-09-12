@@ -1,4 +1,4 @@
-# Share‑It (Self‑Hosted)
+# DateiLink (Self‑Hosted)
 
 Eigenes, kleines File‑Sharing: Datei hochladen → URL bekommen → per E‑Mail teilen. Optionales Ablaufdatum mit **automatischem Cleanup**.
 
@@ -54,10 +54,10 @@ Install PyInstaller if needed, then build:
 
 ```
 pip install pyinstaller
-pyinstaller --noconfirm --onefile --windowed --name ShareIt frontend_desktop.py
+pyinstaller --noconfirm --onefile --windowed --name DateiLink frontend_desktop.py
 ```
 
-The .exe will be created under `dist/ShareIt.exe`.
+The .exe will be created under `dist/DateiLink.exe`.
 
 Tip: If your API URL is fixed, you can hard-code it in `frontend_desktop.py` default input.
 
@@ -76,9 +76,11 @@ Examples (PowerShell):
 ./stop-backend.ps1
 ```
 
-# Share‑It (Self‑Hosted)
+# DateiLink (Self‑Hosted)
 
 Kleines, selbst gehostetes File‑Sharing: Datei hochladen → Download‑Link teilen. Optionales Ablaufdatum mit automatischem Cleanup.
+
+**Powered by Hirsch-Lorenz** - [hirsch-lorenz.de](https://hirsch-lorenz.de)
 
 ## Architektur
 - Backend: FastAPI (nur API, keine Web‑UI)
@@ -132,9 +134,9 @@ Hinweise:
 Mit PyInstaller:
 ```
 pip install pyinstaller
-pyinstaller --noconfirm --onefile --windowed --name ShareIt frontend_desktop.py
+pyinstaller --noconfirm --onefile --windowed --name DateiLink frontend_desktop.py
 ```
-Die .exe liegt danach unter `dist/ShareIt.exe`.
+Die .exe liegt danach unter `dist/DateiLink.exe`.
 
 Einstellungen (API‑URL, Ports, etc.) lassen sich in der App über den Button „Einstellungen“ setzen und werden persistent gespeichert.
 
