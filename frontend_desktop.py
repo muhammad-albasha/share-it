@@ -131,7 +131,7 @@ class App(tk.Tk):
         self.open_sel_btn.pack(side=tk.LEFT, padx=(0, 6))
         self.remove_sel_btn = ttk.Button(btn_bar, text="Aus Liste entfernen", command=self.remove_selected, state=tk.DISABLED)
         self.remove_sel_btn.pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Button(btn_bar, text="Aktualisieren", command=self.refresh_uploads_click).pack(side=tk.LEFT)
+        ttk.Button(btn_bar, text="Aktualisieren", command=self.refresh_uploads_click).pack(side=tk.LEFT, padx=(0, 6))
 
         # Log unten
         self.log = tk.Text(frm, height=8)
@@ -276,6 +276,106 @@ class App(tk.Tk):
             self.history = [it for it in self.history if it.get("download_url") != url]
         self.history.insert(0, item)
         self.save_history()
+
+    # Export/Import der Upload-Liste -------------------------------------------------
+    def export_history(self):
+        try:
+            ts = datetime.now().strftime("%Y-%m-%d")
+            default_name = f"dateilink_uploads_{ts}.json"
+            path = filedialog.asksaveasfilename(
+                title="Uploads exportieren",
+                defaultextension=".json",
+                initialfile=default_name,
+                filetypes=[("JSON", "*.json"), ("Alle Dateien", "*.*")],
+            )
+            if not path:
+                return
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(self.history, f, indent=2, ensure_ascii=False)
+            self.logln(f"Uploads exportiert: {path}")
+        except Exception as e:
+            messagebox.showerror("Fehler", f"Export fehlgeschlagen: {e}")
+
+    def import_history(self):
+        try:
+            path = filedialog.askopenfilename(
+                title="Uploads importieren",
+                filetypes=[("JSON", "*.json"), ("Alle Dateien", "*.*")],
+            )
+            if not path:
+                return
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if not isinstance(data, list):
+                raise ValueError("JSON muss eine Liste von Objekten sein")
+            cleaned = self._normalize_history_items(data)
+            if cleaned is None:
+                raise ValueError("Ungültiges Format der Upload-Liste")
+
+            replace = messagebox.askyesno(
+                "Import",
+                "Sollen die aktuellen Einträge ERSETZT werden?\nNein = Zusammenführen (Duplikate werden entfernt)",
+            )
+            if replace:
+                self.history = cleaned
+            else:
+                self.history = self._merge_history(self.history, cleaned)
+            self.save_history()
+            self.refresh_uploads_list()
+            self.logln(f"Uploads importiert: {path} ({len(cleaned)} Einträge)")
+        except Exception as e:
+            messagebox.showerror("Fehler", f"Import fehlgeschlagen: {e}")
+
+    def _normalize_history_items(self, items: list) -> list | None:
+        norm = []
+        for it in items:
+            if not isinstance(it, dict):
+                return None
+            n = {
+                "filename": str(it.get("filename") or it.get("name") or ""),
+                "download_url": str(it.get("download_url") or it.get("url") or ""),
+                "token": (it.get("token") or None),
+                "expires_at": (it.get("expires_at") or None),
+                "size": it.get("size"),
+                "created_at": it.get("created_at") or datetime.now(timezone.utc).isoformat(),
+            }
+            # Minimal: Es muss mindestens eine URL oder ein Token vorhanden sein
+            if not n["download_url"] and not n["token"]:
+                # überspringen statt failen: toleranter Import
+                continue
+            norm.append(n)
+        return norm
+
+    def _merge_history(self, existing: list, incoming: list) -> list:
+        # Duplikate anhand token bevorzugt, sonst download_url
+        out = []
+        seen = set()
+        def key_for(it):
+            return (it.get("token") or "") + "|" + (it.get("download_url") or "")
+
+        # incoming zuerst (neuer gewinnt), dann existing
+        for src in (incoming, existing):
+            for it in src:
+                k = key_for(it)
+                if k in seen:
+                    continue
+                seen.add(k)
+                out.append(it)
+
+        # optional: nach created_at absteigend sortieren, fallback: unsortiert
+        def parse_dt(s):
+            try:
+                if isinstance(s, str):
+                    t = s.strip()
+                    if t.endswith("Z"):
+                        t = t[:-1] + "+00:00"
+                    return datetime.fromisoformat(t)
+            except Exception:
+                pass
+            return datetime.min.replace(tzinfo=timezone.utc)
+
+        out.sort(key=lambda it: parse_dt(it.get("created_at")), reverse=True)
+        return out
 
     def _is_expired(self, expires_at: str | None) -> bool:
         if not expires_at:
