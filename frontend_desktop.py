@@ -175,6 +175,8 @@ class App(tk.Tk):
 
         self._build_ui()
         self.refresh_uploads_list()
+        # Lazy settings tab handle
+        self._settings_tab = None
 
         # Background validation to auto-remove deleted links
         self._stop_event = threading.Event()
@@ -209,10 +211,17 @@ class App(tk.Tk):
         self.settings_btn = ttk.Button(header, text="⚙", style="Header.TButton", width=3, command=self.open_settings)
         self.settings_btn.pack(side=tk.RIGHT, padx=12, pady=8)
 
-        # Content card
+        # Content area with tabs
         outer = ttk.Frame(self, style="Outer.TFrame")
         outer.pack(fill=tk.BOTH, expand=True)
-        frm = ttk.Frame(outer, style="Card.TFrame")
+        self.notebook = ttk.Notebook(outer)
+        self.notebook.pack(fill=tk.BOTH, expand=True)
+        self.tab_main = ttk.Frame(self.notebook, style="Outer.TFrame")
+        self.notebook.add(self.tab_main, text="Start")
+        # Einstellungen-Tab wird bei Bedarf erstellt (lazy)
+
+        # Main card inside Start tab
+        frm = ttk.Frame(self.tab_main, style="Card.TFrame")
         frm.pack(fill=tk.BOTH, expand=True, padx=12, pady=12)
 
         ttk.Label(frm, text="Datei:").grid(row=1, column=0, sticky="w", **pad)
@@ -305,6 +314,8 @@ class App(tk.Tk):
             Tooltip(self.refresh_btn, "Aktualisieren")
         except Exception:
             pass
+
+    # Hinweis: Einstellungen-Tab wird erst beim Klick auf ⚙ erstellt
 
     def _setup_style(self):
         # Global fonts using named Tk fonts (safer than option_add with strings)
@@ -815,7 +826,39 @@ class App(tk.Tk):
             self.logln(f"Konnte Einstellungen nicht speichern: {e}")
 
     def open_settings(self):
-        SettingsWindow(self, self.settings.copy(), self._apply_settings)
+        # Create and show Einstellungen tab on demand
+        try:
+            if self._settings_tab is None or str(self._settings_tab) not in self.notebook.tabs():
+                self._settings_tab = ttk.Frame(self.notebook, style="Outer.TFrame")
+                self.notebook.add(self._settings_tab, text="Einstellungen")
+                # Build content with OK/Abbrechen that both close the tab
+                self._build_settings_tab(
+                    self._settings_tab,
+                    on_close=self._close_settings_tab,
+                    on_cancel=self._close_settings_tab,
+                )
+            self.notebook.select(self._settings_tab)
+        except Exception:
+            pass
+
+    def _close_settings_tab(self):
+        # Remove and destroy the Einstellungen tab, return to Start
+        try:
+            if self._settings_tab is not None:
+                try:
+                    self.notebook.forget(self._settings_tab)
+                except Exception:
+                    pass
+                try:
+                    self._settings_tab.destroy()
+                except Exception:
+                    pass
+        finally:
+            self._settings_tab = None
+            try:
+                self.notebook.select(self.tab_main)
+            except Exception:
+                pass
 
     def _apply_settings(self, new_settings: dict):
         url = (new_settings.get("api_url") or "http://127.0.0.1:8000").strip()
@@ -825,47 +868,42 @@ class App(tk.Tk):
         masked = (upload_token[:4] + "***") if upload_token else "(kein Token)"
         self.logln(f"Einstellungen gespeichert. API: {url} | Token: {masked}")
 
-
-class SettingsWindow(tk.Toplevel):
-    def __init__(self, parent: App, current: dict, on_save):
-        super().__init__(parent)
-        self.title("Einstellungen")
-        self.transient(parent)
-        self.grab_set()
-        self.resizable(False, False)
-        self.on_save = on_save
-
+    def _build_settings_tab(self, parent: ttk.Frame, on_close=None, on_cancel=None):
         pad = {"padx": 10, "pady": 6}
-        frm = ttk.Frame(self)
-        frm.pack(fill=tk.BOTH, expand=True)
-
+        frm = ttk.Frame(parent, style="Card.TFrame")
+        frm.pack(fill=tk.BOTH, expand=True, padx=12, pady=12)
         ttk.Label(frm, text="Backend API URL").grid(row=0, column=0, sticky="w", **pad)
-        self.api_var = tk.StringVar(value=current.get("api_url", "http://127.0.0.1:8000"))
-        ttk.Entry(frm, textvariable=self.api_var, width=50).grid(row=0, column=1, sticky="ew", **pad)
-
+        api_var = tk.StringVar(value=self.settings.get("api_url", "http://127.0.0.1:8000"))
+        api_entry = ttk.Entry(frm, textvariable=api_var, width=50)
+        api_entry.grid(row=0, column=1, sticky="ew", **pad)
         ttk.Label(frm, text="Upload Token").grid(row=1, column=0, sticky="w", **pad)
-        self.token_var = tk.StringVar(value=current.get("upload_token", ""))
-        token_entry = ttk.Entry(frm, textvariable=self.token_var, width=50, show="*")
+        token_var = tk.StringVar(value=self.settings.get("upload_token", ""))
+        token_entry = ttk.Entry(frm, textvariable=token_var, width=50, show="*")
         token_entry.grid(row=1, column=1, sticky="ew", **pad)
-        # Removed the 'anzeigen' checkbox; token remains masked by default
-
         btns = ttk.Frame(frm)
         btns.grid(row=2, column=0, columnspan=3, sticky="e", **pad)
-        ttk.Button(btns, text="Abbrechen", command=self.destroy).pack(side=tk.RIGHT, padx=5)
-        ttk.Button(btns, text="Speichern", command=self._save).pack(side=tk.RIGHT)
-
+        if on_close or on_cancel:
+            def on_ok():
+                self._apply_settings({
+                    "api_url": api_var.get().strip(),
+                    "upload_token": token_var.get().strip(),
+                })
+                if callable(on_close):
+                    on_close()
+            def on_cancel_click():
+                if callable(on_cancel):
+                    on_cancel()
+            ttk.Button(btns, text="Abbrechen", command=on_cancel_click).pack(side=tk.RIGHT)
+            ttk.Button(btns, text="OK", command=on_ok).pack(side=tk.RIGHT, padx=(0, 6))
+        else:
+            def save_and_apply():
+                self._apply_settings({
+                    "api_url": api_var.get().strip(),
+                    "upload_token": token_var.get().strip(),
+                })
+            ttk.Button(btns, text="Speichern", command=save_and_apply).pack(side=tk.RIGHT)
         frm.columnconfigure(1, weight=1)
 
-    def _save(self):
-        data = {
-            "api_url": self.api_var.get().strip(),
-            "upload_token": self.token_var.get().strip(),
-        }
-        try:
-            self.on_save(data)
-            self.destroy()
-        except Exception as e:
-            messagebox.showerror("Fehler", f"Konnte Einstellungen nicht speichern: {e}")
 
 
 if __name__ == "__main__":
