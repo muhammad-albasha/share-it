@@ -20,6 +20,76 @@ except Exception:
     _HAS_PIL = False
 
 
+    class Tooltip:
+        """Simple tooltip for a widget.
+        Usage: Tooltip(widget, "your text")
+        """
+        def __init__(self, widget, text: str, delay: int = 500):
+            self.widget = widget
+            self.text = text
+            self.delay = delay
+            self._id = None
+            self._tip = None
+            widget.bind("<Enter>", self._on_enter, add="+")
+            widget.bind("<Leave>", self._on_leave, add="+")
+            widget.bind("<Motion>", self._on_motion, add="+")
+
+        def _on_enter(self, _evt=None):
+            self._schedule()
+
+        def _on_motion(self, _evt=None):
+            # restart timer on move for a smoother feel
+            self._schedule()
+
+        def _on_leave(self, _evt=None):
+            self._cancel()
+            self._hide()
+
+        def _schedule(self):
+            self._cancel()
+            self._id = self.widget.after(self.delay, self._show)
+
+        def _cancel(self):
+            if self._id is not None:
+                try:
+                    self.widget.after_cancel(self._id)
+                except Exception:
+                    pass
+                self._id = None
+
+        def _show(self):
+            if self._tip is not None:
+                return
+            try:
+                x = self.widget.winfo_rootx() + 20
+                y = self.widget.winfo_rooty() + self.widget.winfo_height() + 6
+                self._tip = tk.Toplevel(self.widget)
+                self._tip.wm_overrideredirect(True)
+                self._tip.wm_geometry(f"+{x}+{y}")
+                lbl = tk.Label(
+                    self._tip,
+                    text=self.text,
+                    background="#111827",
+                    foreground="#e5e7eb",
+                    padx=6,
+                    pady=3,
+                    relief=tk.SOLID,
+                    borderwidth=1,
+                )
+                lbl.pack()
+            except Exception:
+                # Fail silently if tooltip cannot be created
+                self._tip = None
+
+        def _hide(self):
+            if self._tip is not None:
+                try:
+                    self._tip.destroy()
+                except Exception:
+                    pass
+                self._tip = None
+
+
 def human_bytes(num: int) -> str:
     for unit in ["B", "KB", "MB", "GB", "TB"]:
         if num < 1024.0:
@@ -135,7 +205,9 @@ class App(tk.Tk):
         except Exception:
             pass
         tk.Label(header, text="DateiLink", fg="#ffffff", bg=header_bg, font=("Segoe UI", 14, "bold")).pack(side=tk.LEFT, pady=8)
-        ttk.Button(header, text="Einstellungen", style="Header.TButton", command=self.open_settings).pack(side=tk.RIGHT, padx=12, pady=8)
+        # Settings button as symbol with tooltip
+        self.settings_btn = ttk.Button(header, text="⚙", style="Header.TButton", width=3, command=self.open_settings)
+        self.settings_btn.pack(side=tk.RIGHT, padx=12, pady=8)
 
         # Content card
         outer = ttk.Frame(self, style="Outer.TFrame")
@@ -147,7 +219,8 @@ class App(tk.Tk):
         self.file_var = tk.StringVar()
         self.file_entry = ttk.Entry(frm, textvariable=self.file_var)
         self.file_entry.grid(row=1, column=1, columnspan=2, sticky="ew", **pad)
-        ttk.Button(frm, text="Auswählen", command=self.choose_file).grid(row=1, column=3, sticky="e", **pad)
+        self.pick_btn = ttk.Button(frm, text="📁", width=3, command=self.choose_file)
+        self.pick_btn.grid(row=1, column=3, sticky="e", **pad)
 
         ttk.Label(frm, text="Ablauf (Tage, 0 = One-Time-Download)").grid(row=2, column=0, sticky="w", **pad)
         self.expires = tk.IntVar(value=2)
@@ -158,7 +231,7 @@ class App(tk.Tk):
         self.exp_value_lbl = ttk.Label(frm, text="2")
         self.exp_value_lbl.grid(row=2, column=3, sticky="e", **pad)
 
-        self.upload_btn = ttk.Button(frm, text="Hochladen", style="Accent.TButton", command=self.on_upload, state=tk.DISABLED)
+        self.upload_btn = ttk.Button(frm, text="⏫", width=3, style="Accent.TButton", command=self.on_upload, state=tk.DISABLED)
         self.upload_btn.grid(row=3, column=0, sticky="w", **pad)
 
         # Meine Uploads Abschnitt
@@ -180,13 +253,14 @@ class App(tk.Tk):
 
         btn_bar = ttk.Frame(frm)
         btn_bar.grid(row=7, column=0, columnspan=4, sticky="w", **pad)
-        self.copy_sel_btn = ttk.Button(btn_bar, text="Link kopieren", command=self.copy_selected, state=tk.DISABLED)
+        self.copy_sel_btn = ttk.Button(btn_bar, text="📋", width=3, command=self.copy_selected, state=tk.DISABLED)
         self.copy_sel_btn.pack(side=tk.LEFT, padx=(0, 6))
-        self.open_sel_btn = ttk.Button(btn_bar, text="Im Browser öffnen", command=self.open_selected, state=tk.DISABLED)
+        self.open_sel_btn = ttk.Button(btn_bar, text="🌐", width=3, command=self.open_selected, state=tk.DISABLED)
         self.open_sel_btn.pack(side=tk.LEFT, padx=(0, 6))
-        self.remove_sel_btn = ttk.Button(btn_bar, text="Aus Liste entfernen", command=self.remove_selected, state=tk.DISABLED)
+        self.remove_sel_btn = ttk.Button(btn_bar, text="🗑", width=3, command=self.remove_selected, state=tk.DISABLED)
         self.remove_sel_btn.pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Button(btn_bar, text="Aktualisieren", style="Secondary.TButton", command=self.refresh_uploads_click).pack(side=tk.LEFT, padx=(0, 6))
+        self.refresh_btn = ttk.Button(btn_bar, text="🔄", width=3, style="Secondary.TButton", command=self.refresh_uploads_click)
+        self.refresh_btn.pack(side=tk.LEFT, padx=(0, 6))
 
         # Log unten
         self.log = tk.Text(frm, height=8, bg="#0f172a", fg="#e5e7eb", insertbackground="#ffffff", relief=tk.FLAT, borderwidth=0)
@@ -211,6 +285,18 @@ class App(tk.Tk):
         try:
             self.uploads_tree.tag_configure("odd", background="#fafafa")
             self.uploads_tree.tag_configure("even", background="#ffffff")
+        except Exception:
+            pass
+
+        # Tooltips for icon buttons
+        try:
+            Tooltip(self.settings_btn, "Einstellungen")
+            Tooltip(self.pick_btn, "Datei auswählen")
+            Tooltip(self.upload_btn, "Hochladen")
+            Tooltip(self.copy_sel_btn, "Link kopieren")
+            Tooltip(self.open_sel_btn, "Im Browser öffnen")
+            Tooltip(self.remove_sel_btn, "Aus Liste entfernen")
+            Tooltip(self.refresh_btn, "Aktualisieren")
         except Exception:
             pass
 
