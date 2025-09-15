@@ -192,3 +192,6 @@ curl -H "X-ShareIt-Token: SuperGeheimerToken123" -F "file=@test.txt" -F "expires
 - Läuft der Dienst? Prüfen: `netstat -ano | findstr :8000`
 - Stop findet keine PID? Discovery nutzen: `./stop-backend.ps1 -Port 8000`
 - Keine Konsole gewünscht? `-NoConsole` verwenden; mit `-LogFile` Logs mitschreiben (stdout → .log, stderr → .log.err).
+
+
+Stop-Process -Name DateiLink -ErrorAction SilentlyContinue; Remove-Item -Recurse -Force .\build, .\dist -ErrorAction SilentlyContinue; C:/Users/MAlbasha/Desktop/share-it/.venv/Scripts/python.exe -m PyInstaller --clean --noconfirm DateiLink.spec
