@@ -8,8 +8,16 @@ from pathlib import Path
 from datetime import datetime, timezone
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
+import tkinter.font as tkfont
 
 import requests
+try:
+    from PIL import Image, ImageTk  # type: ignore
+    _HAS_PIL = True
+except Exception:
+    Image = None  # type: ignore
+    ImageTk = None  # type: ignore
+    _HAS_PIL = False
 
 
 def human_bytes(num: int) -> str:
@@ -43,19 +51,40 @@ def _app_dir() -> Path:
     return Path(__file__).parent
 
 
+def _res_dir() -> Path:
+    """Return directory for bundled resources (PyInstaller _MEIPASS) or script dir.
+    Use this for read-only assets like images/icons that are packaged into the exe.
+    Keep _app_dir for writable files like config/history.
+    """
+    base = getattr(sys, "_MEIPASS", None)
+    if base:
+        return Path(base)
+    return Path(__file__).parent
+
+
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("DateiLink")
         self.geometry("820x560")
 
-        # Modernes Icon setzen (neben .exe bzw. Skript in ./static)
-        icon_path = _app_dir() / "static" / "dateilink.ico"
+        # Modernes Icon setzen (bevorzugt aus gebündelten Ressourcen ./static)
+        icon_path = _res_dir() / "static" / "dateilink.ico"
         if icon_path.exists():
             try:
                 self.iconbitmap(str(icon_path))
             except Exception:
-                pass
+                # Fallback: try iconphoto via PIL if available
+                if _HAS_PIL:
+                    try:
+                        _img = Image.open(icon_path)
+                        self._app_icon = ImageTk.PhotoImage(_img)
+                        self.iconphoto(True, self._app_icon)
+                    except Exception:
+                        pass
+
+        # Styles first for consistent look
+        self._setup_style()
 
         self.selected_file = None
         self.last_link = None
@@ -83,15 +112,36 @@ class App(tk.Tk):
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
     def _build_ui(self):
-        pad = {"padx": 8, "pady": 6}
-        frm = ttk.Frame(self)
-        frm.pack(fill=tk.BOTH, expand=True)
+        pad = {"padx": 10, "pady": 8}
 
-        title = ttk.Label(frm, text="DateiLink", font=("Segoe UI", 13, "bold"))
-        title.grid(row=0, column=0, columnspan=3, sticky="w", **pad)
+        # Header bar
+        header_bg = "#1f2937"  # dark slate
+        header = tk.Frame(self, bg=header_bg)
+        header.pack(fill=tk.X, side=tk.TOP)
+        # Icon in header (prefer dateilink.ico; fallback to logo.png)
+        try:
+            ico_path = _res_dir() / "static" / "dateilink.ico"
+            if _HAS_PIL and ico_path.exists():
+                img = Image.open(ico_path)
+                # Resize to a good header size
+                img = img.resize((20, 20), Image.LANCZOS)
+                self._header_icon = ImageTk.PhotoImage(img)
+                tk.Label(header, image=self._header_icon, bg=header_bg).pack(side=tk.LEFT, padx=(12, 8), pady=8)
+            else:
+                logo_path = _res_dir() / "static" / "logo.png"
+                if logo_path.exists():
+                    self._logo_img = tk.PhotoImage(file=str(logo_path))
+                    tk.Label(header, image=self._logo_img, bg=header_bg).pack(side=tk.LEFT, padx=(12, 8), pady=8)
+        except Exception:
+            pass
+        tk.Label(header, text="DateiLink", fg="#ffffff", bg=header_bg, font=("Segoe UI", 14, "bold")).pack(side=tk.LEFT, pady=8)
+        ttk.Button(header, text="Einstellungen", style="Header.TButton", command=self.open_settings).pack(side=tk.RIGHT, padx=12, pady=8)
 
-        self.settings_btn = ttk.Button(frm, text="Einstellungen", command=self.open_settings)
-        self.settings_btn.grid(row=0, column=3, sticky="e", **pad)
+        # Content card
+        outer = ttk.Frame(self, style="Outer.TFrame")
+        outer.pack(fill=tk.BOTH, expand=True)
+        frm = ttk.Frame(outer, style="Card.TFrame")
+        frm.pack(fill=tk.BOTH, expand=True, padx=12, pady=12)
 
         ttk.Label(frm, text="Datei:").grid(row=1, column=0, sticky="w", **pad)
         self.file_var = tk.StringVar()
@@ -101,20 +151,15 @@ class App(tk.Tk):
 
         ttk.Label(frm, text="Ablauf (Tage, 0 = One-Time-Download)").grid(row=2, column=0, sticky="w", **pad)
         self.expires = tk.IntVar(value=2)
-        self.exp_scale = tk.Scale(
-            frm, from_=0, to=30, orient=tk.HORIZONTAL, resolution=1,
-            showvalue=False, variable=self.expires, command=self._on_exp_change
+        self.exp_scale = ttk.Scale(
+            frm, from_=0, to=30, orient=tk.HORIZONTAL, variable=self.expires, command=self._on_exp_change
         )
         self.exp_scale.grid(row=2, column=1, columnspan=2, sticky="ew", **pad)
         self.exp_value_lbl = ttk.Label(frm, text="2")
         self.exp_value_lbl.grid(row=2, column=3, sticky="e", **pad)
 
-        self.upload_btn = ttk.Button(frm, text="Hochladen", command=self.on_upload, state=tk.DISABLED)
+        self.upload_btn = ttk.Button(frm, text="Hochladen", style="Accent.TButton", command=self.on_upload, state=tk.DISABLED)
         self.upload_btn.grid(row=3, column=0, sticky="w", **pad)
-        self.open_btn = ttk.Button(frm, text="Link öffnen", command=self.open_link, state=tk.DISABLED)
-        self.open_btn.grid(row=3, column=1, sticky="w", **pad)
-        self.copy_btn = ttk.Button(frm, text="Kopieren", command=self.copy_link, state=tk.DISABLED)
-        self.copy_btn.grid(row=3, column=2, sticky="w", **pad)
 
         # Meine Uploads Abschnitt
         sep1 = ttk.Separator(frm)
@@ -122,13 +167,14 @@ class App(tk.Tk):
 
         ttk.Label(frm, text="Meine Uploads (nicht abgelaufen)", font=("Segoe UI", 10, "bold")).grid(row=5, column=0, columnspan=2, sticky="w", **pad)
         # URL nicht anzeigen: nur Datei, Ablauf, und Download-Status
-        self.uploads_tree = ttk.Treeview(frm, columns=("name", "expires", "downloaded"), show="headings", height=8)
+        self.uploads_tree = ttk.Treeview(frm, columns=("name", "expires", "downloaded"), show="headings", height=10, style="Modern.Treeview")
         self.uploads_tree.heading("name", text="Datei")
         self.uploads_tree.heading("expires", text="Läuft ab")
         self.uploads_tree.heading("downloaded", text="Heruntergeladen")
-        self.uploads_tree.column("name", width=420)
-        self.uploads_tree.column("expires", width=180)
-        self.uploads_tree.column("downloaded", width=140, anchor="center")
+        # Make the file column a bit narrower and let 'expires' flex to fill
+        self.uploads_tree.column("name", width=360, stretch=False)
+        self.uploads_tree.column("expires", width=220, stretch=True)
+        self.uploads_tree.column("downloaded", width=140, anchor="center", stretch=False)
         self.uploads_tree.grid(row=6, column=0, columnspan=4, sticky="nsew", **pad)
         self.uploads_tree.bind("<<TreeviewSelect>>", self._on_tree_select)
 
@@ -140,10 +186,10 @@ class App(tk.Tk):
         self.open_sel_btn.pack(side=tk.LEFT, padx=(0, 6))
         self.remove_sel_btn = ttk.Button(btn_bar, text="Aus Liste entfernen", command=self.remove_selected, state=tk.DISABLED)
         self.remove_sel_btn.pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Button(btn_bar, text="Aktualisieren", command=self.refresh_uploads_click).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(btn_bar, text="Aktualisieren", style="Secondary.TButton", command=self.refresh_uploads_click).pack(side=tk.LEFT, padx=(0, 6))
 
         # Log unten
-        self.log = tk.Text(frm, height=8)
+        self.log = tk.Text(frm, height=8, bg="#0f172a", fg="#e5e7eb", insertbackground="#ffffff", relief=tk.FLAT, borderwidth=0)
         self.log.grid(row=8, column=0, columnspan=4, sticky="nsew", **pad)
         self.log.configure(state=tk.DISABLED)
 
@@ -160,6 +206,70 @@ class App(tk.Tk):
         frm.columnconfigure(2, weight=1)
         frm.rowconfigure(6, weight=1)
         frm.rowconfigure(8, weight=1)
+
+        # Zebra striping for treeview rows
+        try:
+            self.uploads_tree.tag_configure("odd", background="#fafafa")
+            self.uploads_tree.tag_configure("even", background="#ffffff")
+        except Exception:
+            pass
+
+    def _setup_style(self):
+        # Global fonts using named Tk fonts (safer than option_add with strings)
+        try:
+            default_font = tkfont.nametofont("TkDefaultFont")
+            default_font.configure(family="Segoe UI", size=10)
+            text_font = tkfont.nametofont("TkTextFont")
+            text_font.configure(family="Segoe UI", size=10)
+            fixed_font = tkfont.nametofont("TkFixedFont")
+            fixed_font.configure(family="Consolas", size=10)
+        except Exception:
+            pass
+
+        style = ttk.Style(self)
+        try:
+            style.theme_use("clam")
+        except Exception:
+            pass
+
+        bg = "#f7f9fc"
+        card_bg = "#ffffff"
+        border = "#e5e7eb"
+        text = "#1f2937"
+        muted = "#6b7280"
+        accent = "#e87722"
+
+        # Base
+        self.configure(bg=bg)
+        style.configure("TFrame", background=bg)
+        style.configure("Outer.TFrame", background=bg)
+        style.configure("Card.TFrame", background=card_bg, relief="solid", bordercolor=border, borderwidth=1)
+        style.configure("TLabel", background=card_bg, foreground=text)
+        style.configure("Header.TButton", padding=6)
+
+        # Buttons
+        style.configure("TButton", padding=(10, 6), font=("Segoe UI", 10))
+        style.configure("Accent.TButton", background=accent, foreground="#ffffff", borderwidth=0, focusthickness=0)
+        style.map("Accent.TButton", background=[("active", "#ff8d33"), ("disabled", "#d1d5db")])
+        style.configure("Secondary.TButton", background="#e5e7eb", foreground=text, borderwidth=0)
+        style.map("Secondary.TButton", background=[("active", "#d1d5db")])
+
+        # Inputs
+        style.configure("TEntry", padding=6)
+        style.configure("TScale", troughcolor="#e5e7eb")
+
+        # Treeview
+        style.configure(
+            "Modern.Treeview",
+            background=card_bg,
+            fieldbackground=card_bg,
+            foreground=text,
+            rowheight=26,
+            bordercolor=border,
+            borderwidth=1,
+        )
+        style.configure("Modern.Treeview.Heading", background=card_bg, foreground=muted, padding=6)
+        style.map("Treeview", background=[("selected", "#cfe8ff")])
 
     def _migrate_legacy_file(self, old_path: Path, new_path: Path):
         """Rename legacy JSON files to new names once, preserving data.
@@ -242,8 +352,6 @@ class App(tk.Tk):
                         "downloaded": False,
                     })
                     self.refresh_uploads_list()
-                    self.open_btn.config(state=tk.NORMAL)
-                    self.copy_btn.config(state=tk.NORMAL)
                 else:
                     self.logln("Fehler beim Upload: Unbekannte Antwort")
             except requests.HTTPError as e:
@@ -259,23 +367,7 @@ class App(tk.Tk):
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def open_link(self):
-        if self.last_link:
-            webbrowser.open(self.last_link)
-            # Nach kurzer Zeit prüfen, ob Link ungültig wurde (z.B. One-Time)
-            def worker():
-                time.sleep(3)
-                try:
-                    self._network_prune_once()
-                finally:
-                    self.after(0, self.refresh_uploads_list)
-            threading.Thread(target=worker, daemon=True).start()
-
-    def copy_link(self):
-        if self.last_link:
-            self.clipboard_clear()
-            self.clipboard_append(self.last_link)
-            self.logln("Link kopiert.")
+    
 
     def _on_exp_change(self, value):
         try:
