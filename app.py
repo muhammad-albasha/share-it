@@ -949,38 +949,6 @@ async def download(token: str, background_tasks: BackgroundTasks, request: Reque
                 headers=headers,
             )
         
-        # SOFORTIGE LÖSCHUNG bei One-Time-Downloads (nach Response)
-        if should_delete_after_download:
-            try:
-                logger.info(f"� Immediately deleting one-time download: {row['orig_name']}")
-                
-                # 1. Datei vom Dateisystem löschen
-                file_path = Path(row["path"])
-                if file_path.exists():
-                    file_path.unlink()
-                    logger.info(f"✅ Successfully deleted file from storage: {row['orig_name']}")
-                else:
-                    logger.warning(f"⚠️ File not found on disk: {file_path}")
-                
-                # 2. Eintrag aus Datenbank löschen
-                with get_db() as conn:
-                    conn.execute("DELETE FROM files WHERE token = ?", (token,))
-                    conn.commit()
-                logger.info(f"✅ Successfully deleted database entry: {row['orig_name']}")
-                
-            except Exception as delete_error:
-                logger.error(f"❌ Error during immediate deletion of {row['orig_name']}: {delete_error}")
-                # Fallback: Markiere als abgelaufen für späteren Cleanup
-                try:
-                    with get_db() as conn:
-                        now_iso = datetime.now(timezone.utc).isoformat()
-                        conn.execute("UPDATE files SET expires_at = ? WHERE token = ?", (now_iso, token))
-                        conn.commit()
-                    logger.info(f"⏰ Fallback: File marked as expired for cleanup: {row['orig_name']}")
-                except Exception as fallback_error:
-                    logger.error(f"❌ Even fallback failed for {row['orig_name']}: {fallback_error}")
-        
-        return response
         
     except Exception as e:
         logger.error(f"❌ Error during file download: {e}")
