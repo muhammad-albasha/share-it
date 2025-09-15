@@ -240,7 +240,7 @@ class App(tk.Tk):
         self.exp_value_lbl = ttk.Label(frm, text="2")
         self.exp_value_lbl.grid(row=2, column=3, sticky="e", **pad)
 
-        self.upload_btn = ttk.Button(frm, text="⏫", width=3, style="Accent.TButton", command=self.on_upload, state=tk.DISABLED)
+        self.upload_btn = ttk.Button(frm, text="⬆️ Hochladen", width=20, style="Accent.TButton", command=self.on_upload, state=tk.DISABLED)
         self.upload_btn.grid(row=3, column=0, sticky="w", **pad)
 
         # Meine Uploads Abschnitt
