@@ -292,7 +292,9 @@ with get_db() as conn:
         path TEXT NOT NULL,
         created_at TEXT NOT NULL,
         expires_at TEXT,
-        one_time_download INTEGER DEFAULT 0
+        one_time_download INTEGER DEFAULT 0,
+        downloaded INTEGER DEFAULT 0,
+        storage TEXT DEFAULT 'local'
         );
     """
     )
@@ -309,6 +311,12 @@ with get_db() as conn:
     # Migration: storage backend Spalte
     try:
         conn.execute("ALTER TABLE files ADD COLUMN storage TEXT DEFAULT 'local'")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass
+    # Migration: downloaded Spalte
+    try:
+        conn.execute("ALTER TABLE files ADD COLUMN downloaded INTEGER DEFAULT 0")
         conn.commit()
     except sqlite3.OperationalError:
         pass
@@ -865,7 +873,7 @@ async def download(token: str, background_tasks: BackgroundTasks, request: Reque
             "</h1><div class='meta'>",
             f"<div><strong>Dateiname:</strong> {row['orig_name']}</div>",
             f"<div><strong>Größe:</strong> {human_size(size_bytes)}</div>",
-            f"<div><strong>Speicher:</strong> {('S3/MinIO' if storage_mode=='s3' else 'Lokal')}</div>",
+            (f"<div><strong>Speicher:</strong> S3/MinIO</div>" if storage_mode=='s3' else ""),
             f"<div><strong>Ablauf:</strong> {expires_info}</div>",
         ]
         if should_delete_after_download:
@@ -900,6 +908,14 @@ async def download(token: str, background_tasks: BackgroundTasks, request: Reque
                 logger.error(f"Fehler beim Generieren der Presigned URL: {e}")
                 raise HTTPException(status_code=500, detail="Fehler beim Erzeugen der Download-URL")
 
+            # Markiere als heruntergeladen (auch bei S3-Redirect)
+            try:
+                with get_db() as conn_ud:
+                    conn_ud.execute("UPDATE files SET downloaded = 1 WHERE token = ?", (token,))
+                    conn_ud.commit()
+            except Exception:
+                pass
+
             if should_delete_after_download:
                 async def delayed_delete_s3():
                     await asyncio.sleep(5)
@@ -919,6 +935,13 @@ async def download(token: str, background_tasks: BackgroundTasks, request: Reque
                     row["path"], 
                     row["orig_name"]
                 )
+            # Markiere als heruntergeladen vor dem Senden
+            try:
+                with get_db() as conn_ud:
+                    conn_ud.execute("UPDATE files SET downloaded = 1 WHERE token = ?", (token,))
+                    conn_ud.commit()
+            except Exception:
+                pass
             return FileResponse(
                 path,
                 media_type=row["mime"] or "application/octet-stream",
@@ -1141,23 +1164,28 @@ async def link_status(token: str):
     try:
         with get_db() as conn:
             row = conn.execute(
-                "SELECT expires_at FROM files WHERE token = ?",
+                "SELECT expires_at, downloaded FROM files WHERE token = ?",
                 (token,)
             ).fetchone()
         if not row:
-            return {"exists": False}
+            return {"exists": False, "downloaded": False}
         # Prüfe Ablauf
         exp = row["expires_at"]
         if exp:
             try:
                 if datetime.fromisoformat(exp) < datetime.now(timezone.utc):
-                    return {"exists": False}
+                    return {"exists": False, "downloaded": False}
             except ValueError:
-                return {"exists": False}
-        return {"exists": True}
+                return {"exists": False, "downloaded": False}
+        downloaded = False
+        try:
+            downloaded = bool(row["downloaded"])
+        except Exception:
+            downloaded = False
+        return {"exists": True, "downloaded": downloaded}
     except Exception:
         # Bei Fehler konservativ: nicht löschen im Frontend
-        return {"exists": True}
+        return {"exists": True, "downloaded": False}
 
 @app.get("/admin/api/debug-files")
 async def debug_files(request: Request):
@@ -1232,11 +1260,18 @@ async def create_test_expired_file(request: Request):
         
         # Erstelle DB-Eintrag mit Ablaufzeit in der Vergangenheit
         expires_at = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+        created = datetime.now(timezone.utc).isoformat()
+        size = len(test_content)
+        mime = "text/plain"
         
         with get_db() as conn:
+            # Versuche Insert mit vorhandenen Spalten; fehlende werden per DEFAULT gefüllt
             conn.execute(
-                "INSERT INTO files (token, orig_name, path, size, expires_at) VALUES (?, ?, ?, ?, ?)",
-                (token, test_filename, str(file_path), len(test_content), expires_at)
+                """
+                INSERT INTO files(token, orig_name, mime, size, path, created_at, expires_at, one_time_download, storage)
+                VALUES(?,?,?,?,?,?,?,?,?)
+                """,
+                (token, test_filename, mime, size, str(file_path), created, expires_at, 0, "local"),
             )
             conn.commit()
         
@@ -1250,7 +1285,6 @@ async def create_test_expired_file(request: Request):
             "expires_at": expires_at,
             "path": str(file_path)
         }
-        
     except Exception as e:
         logger.error(f"Error creating test expired file: {e}")
         raise HTTPException(status_code=500, detail=str(e))

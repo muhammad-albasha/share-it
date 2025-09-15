@@ -121,12 +121,14 @@ class App(tk.Tk):
         sep1.grid(row=4, column=0, columnspan=4, sticky="ew", **pad)
 
         ttk.Label(frm, text="Meine Uploads (nicht abgelaufen)", font=("Segoe UI", 10, "bold")).grid(row=5, column=0, columnspan=2, sticky="w", **pad)
-        # URL nicht anzeigen: nur Datei und Ablauf
-        self.uploads_tree = ttk.Treeview(frm, columns=("name", "expires"), show="headings", height=8)
+        # URL nicht anzeigen: nur Datei, Ablauf, und Download-Status
+        self.uploads_tree = ttk.Treeview(frm, columns=("name", "expires", "downloaded"), show="headings", height=8)
         self.uploads_tree.heading("name", text="Datei")
         self.uploads_tree.heading("expires", text="Läuft ab")
+        self.uploads_tree.heading("downloaded", text="Heruntergeladen")
         self.uploads_tree.column("name", width=420)
         self.uploads_tree.column("expires", width=180)
+        self.uploads_tree.column("downloaded", width=140, anchor="center")
         self.uploads_tree.grid(row=6, column=0, columnspan=4, sticky="nsew", **pad)
         self.uploads_tree.bind("<<TreeviewSelect>>", self._on_tree_select)
 
@@ -237,6 +239,7 @@ class App(tk.Tk):
                         "expires_at": data.get("expires_at"),
                         "size": data.get("size"),
                         "created_at": datetime.now(timezone.utc).isoformat(),
+                        "downloaded": False,
                     })
                     self.refresh_uploads_list()
                     self.open_btn.config(state=tk.NORMAL)
@@ -372,6 +375,7 @@ class App(tk.Tk):
                 "expires_at": (it.get("expires_at") or None),
                 "size": it.get("size"),
                 "created_at": it.get("created_at") or datetime.now(timezone.utc).isoformat(),
+                "downloaded": bool(it.get("downloaded", False)),
             }
             # Minimal: Es muss mindestens eine URL oder ein Token vorhanden sein
             if not n["download_url"] and not n["token"]:
@@ -444,9 +448,9 @@ class App(tk.Tk):
         for it in self.history:
             name = it.get("filename") or "(unbekannt)"
             exp = it.get("expires_at") or "nie/one-time"
-
+            downloaded = "Ja" if it.get("downloaded") else "Nein"
             url = it.get("download_url") or ""
-            iid = self.uploads_tree.insert("", tk.END, values=(name, exp))
+            iid = self.uploads_tree.insert("", tk.END, values=(name, exp, downloaded))
             # URL pro Zeile merken (nicht sichtbar)
             self.row_url[str(iid)] = url
         self._update_sel_buttons()
@@ -543,6 +547,12 @@ class App(tk.Tk):
                         data = sresp.json()
                         if not data.get("exists", True):
                             to_remove_urls.add(url)
+                            continue
+                        # Update downloaded flag in history
+                        if data.get("downloaded") is True and not it.get("downloaded"):
+                            it["downloaded"] = True
+                            # Persist the change
+                            self.save_history()
             except requests.RequestException:
                 # Netzwerkfehler ignorieren (später erneut versuchen)
                 pass
