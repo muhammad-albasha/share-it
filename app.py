@@ -294,6 +294,7 @@ with get_db() as conn:
         expires_at TEXT,
         one_time_download INTEGER DEFAULT 0,
         downloaded INTEGER DEFAULT 0,
+        download_count INTEGER DEFAULT 0,
         storage TEXT DEFAULT 'local'
         );
     """
@@ -317,6 +318,12 @@ with get_db() as conn:
     # Migration: downloaded Spalte
     try:
         conn.execute("ALTER TABLE files ADD COLUMN downloaded INTEGER DEFAULT 0")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass
+    # Migration: download_count Spalte
+    try:
+        conn.execute("ALTER TABLE files ADD COLUMN download_count INTEGER DEFAULT 0")
         conn.commit()
     except sqlite3.OperationalError:
         pass
@@ -908,10 +915,13 @@ async def download(token: str, background_tasks: BackgroundTasks, request: Reque
                 logger.error(f"Fehler beim Generieren der Presigned URL: {e}")
                 raise HTTPException(status_code=500, detail="Fehler beim Erzeugen der Download-URL")
 
-            # Markiere als heruntergeladen (auch bei S3-Redirect)
+            # Markiere als heruntergeladen (auch bei S3-Redirect) und erhöhe Zähler
             try:
                 with get_db() as conn_ud:
-                    conn_ud.execute("UPDATE files SET downloaded = 1 WHERE token = ?", (token,))
+                    conn_ud.execute(
+                        "UPDATE files SET downloaded = 1, download_count = COALESCE(download_count,0) + 1 WHERE token = ?",
+                        (token,)
+                    )
                     conn_ud.commit()
             except Exception:
                 pass
@@ -935,10 +945,13 @@ async def download(token: str, background_tasks: BackgroundTasks, request: Reque
                     row["path"], 
                     row["orig_name"]
                 )
-            # Markiere als heruntergeladen vor dem Senden
+            # Markiere als heruntergeladen vor dem Senden und erhöhe Zähler
             try:
                 with get_db() as conn_ud:
-                    conn_ud.execute("UPDATE files SET downloaded = 1 WHERE token = ?", (token,))
+                    conn_ud.execute(
+                        "UPDATE files SET downloaded = 1, download_count = COALESCE(download_count,0) + 1 WHERE token = ?",
+                        (token,)
+                    )
                     conn_ud.commit()
             except Exception:
                 pass
@@ -1132,7 +1145,7 @@ async def link_status(token: str):
     try:
         with get_db() as conn:
             row = conn.execute(
-                "SELECT expires_at, downloaded FROM files WHERE token = ?",
+                "SELECT expires_at, downloaded, download_count FROM files WHERE token = ?",
                 (token,)
             ).fetchone()
         if not row:
@@ -1146,14 +1159,20 @@ async def link_status(token: str):
             except ValueError:
                 return {"exists": False, "downloaded": False}
         downloaded = False
+        download_count = 0
         try:
             downloaded = bool(row["downloaded"])
         except Exception:
             downloaded = False
-        return {"exists": True, "downloaded": downloaded}
+        try:
+            download_count = int(row["download_count"]) if row["download_count"] is not None else 0
+        except Exception:
+            download_count = 0
+        # Rückwärtskompatibel: downloaded bleibt erhalten, zusätzlich Zähler liefern
+        return {"exists": True, "downloaded": downloaded, "download_count": download_count}
     except Exception:
         # Bei Fehler konservativ: nicht löschen im Frontend
-        return {"exists": True, "downloaded": False}
+        return {"exists": True, "downloaded": False, "download_count": 0}
 
 @app.get("/admin/api/debug-files")
 async def debug_files(request: Request):

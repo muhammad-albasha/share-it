@@ -239,15 +239,21 @@ class App(tk.Tk):
         sep1.grid(row=4, column=0, columnspan=4, sticky="ew", **pad)
 
         ttk.Label(frm, text="Meine Uploads (nicht abgelaufen)", font=("Segoe UI", 10, "bold")).grid(row=5, column=0, columnspan=2, sticky="w", **pad)
-        # URL nicht anzeigen: nur Datei, Ablauf, und Download-Status
-        self.uploads_tree = ttk.Treeview(frm, columns=("name", "expires", "downloaded"), show="headings", height=10, style="Modern.Treeview")
+        # URL nicht anzeigen: nur Datei, Ablauf, und Download-Zähler
+        self.uploads_tree = ttk.Treeview(
+            frm,
+            columns=("name", "expires", "downloads"),
+            show="headings",
+            height=10,
+            style="Modern.Treeview",
+        )
         self.uploads_tree.heading("name", text="Datei")
         self.uploads_tree.heading("expires", text="Läuft ab")
-        self.uploads_tree.heading("downloaded", text="Heruntergeladen")
+        self.uploads_tree.heading("downloads", text="Heruntergeladen")
         # Make the file column a bit narrower and let 'expires' flex to fill
         self.uploads_tree.column("name", width=360, stretch=False)
         self.uploads_tree.column("expires", width=220, stretch=True)
-        self.uploads_tree.column("downloaded", width=140, anchor="center", stretch=False)
+        self.uploads_tree.column("downloads", width=120, anchor="center", stretch=False)
         self.uploads_tree.grid(row=6, column=0, columnspan=4, sticky="nsew", **pad)
         self.uploads_tree.bind("<<TreeviewSelect>>", self._on_tree_select)
 
@@ -435,6 +441,8 @@ class App(tk.Tk):
                         "expires_at": data.get("expires_at"),
                         "size": data.get("size"),
                         "created_at": datetime.now(timezone.utc).isoformat(),
+                        # Neue Zählerspalte; für Alt-Daten weiter kompatibel
+                        "download_count": 0,
                         "downloaded": False,
                     })
                     self.refresh_uploads_list()
@@ -626,9 +634,18 @@ class App(tk.Tk):
         for it in self.history:
             name = it.get("filename") or "(unbekannt)"
             exp = it.get("expires_at") or "nie/one-time"
-            downloaded = "Ja" if it.get("downloaded") else "Nein"
+            # Anzeige: Zähler statt Ja/Nein; fallback für Alt-Historie
+            count = it.get("download_count")
+            if isinstance(count, bool):
+                count = 1 if count else 0
+            if count is None:
+                count = 1 if it.get("downloaded") else 0
+            try:
+                count = int(count)
+            except Exception:
+                count = 0
             url = it.get("download_url") or ""
-            iid = self.uploads_tree.insert("", tk.END, values=(name, exp, downloaded))
+            iid = self.uploads_tree.insert("", tk.END, values=(name, exp, str(count)))
             # URL pro Zeile merken (nicht sichtbar)
             self.row_url[str(iid)] = url
         self._update_sel_buttons()
@@ -648,9 +665,10 @@ class App(tk.Tk):
             return None
         iid = sel[0]
         vals = self.uploads_tree.item(iid, "values")
-        # values: (name, expires) – URL separat gemappt
+        # values: (name, expires, downloads) – URL separat gemappt
         name = vals[0] if len(vals) > 0 else ""
         expires = vals[1] if len(vals) > 1 else ""
+        # downloads at vals[2] (not used here)
         url = self.row_url.get(str(iid), "")
         return (name, expires, url)
 
@@ -726,11 +744,19 @@ class App(tk.Tk):
                         if not data.get("exists", True):
                             to_remove_urls.add(url)
                             continue
-                        # Update downloaded flag in history
-                        if data.get("downloaded") is True and not it.get("downloaded"):
-                            it["downloaded"] = True
-                            # Persist the change
-                            self.save_history()
+                        # Update download counter and legacy 'downloaded' flag
+                        new_count = data.get("download_count")
+                        try:
+                            new_count = int(new_count) if new_count is not None else None
+                        except Exception:
+                            new_count = None
+                        if new_count is not None:
+                            if it.get("download_count") != new_count:
+                                it["download_count"] = new_count
+                                # Maintain legacy boolean for compatibility
+                                if new_count > 0:
+                                    it["downloaded"] = True
+                                self.save_history()
             except requests.RequestException:
                 # Netzwerkfehler ignorieren (später erneut versuchen)
                 pass
@@ -821,10 +847,7 @@ class SettingsWindow(tk.Toplevel):
         self.token_var = tk.StringVar(value=current.get("upload_token", ""))
         token_entry = ttk.Entry(frm, textvariable=self.token_var, width=50, show="*")
         token_entry.grid(row=1, column=1, sticky="ew", **pad)
-        def toggle_show():
-            token_entry.config(show="" if show_var.get() else "*")
-        show_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(frm, text="anzeigen", variable=show_var, command=toggle_show).grid(row=1, column=2, sticky="w")
+        # Removed the 'anzeigen' checkbox; token remains masked by default
 
         btns = ttk.Frame(frm)
         btns.grid(row=2, column=0, columnspan=3, sticky="e", **pad)
