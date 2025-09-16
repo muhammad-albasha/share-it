@@ -187,7 +187,7 @@ class App(tk.Tk):
         pad = {"padx": 10, "pady": 8}
 
         # Header bar
-        header_bg = "#1f2937"  # dark slate
+        header_bg = "#ffffff"  # dark slate
         header = tk.Frame(self, bg=header_bg)
         header.pack(fill=tk.X, side=tk.TOP)
         # Icon in header (prefer dateilink.ico; fallback to logo.png)
